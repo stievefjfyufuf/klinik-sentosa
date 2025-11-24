@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <title>Klinik Sentosa - Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- LOGIN -->
+    <section id="login-screen" class="screen screen-login screen--active">
+      <div class="login-bg"></div>
+      <div class="login-card">
+        <div class="login-left">
+          <div class="login-brand">
+            <div class="logo-square">+</div>
+            <div class="brand-text">
+              <h1>Klinik Sentosa</h1>
+              <p class="sub">Sistem Manajemen Klinik Terpadu</p>
+            </div>
+          </div>
+
+          <p class="lead">Pilih role lalu masuk ke sistem</p>
+
+          <div class="role-group" aria-label="Pilih Role" id="role-group">
+            <button class="role-option role-option--active" data-role="Petugas Administrasi">Petugas</button>
+            <button class="role-option" data-role="Dokter">Dokter</button>
+            <button class="role-option" data-role="Perawat">Perawat</button>
+            <button class="role-option" data-role="Kasir">Kasir</button>
+            <button class="role-option" data-role="Apoteker">Apoteker</button>
+            <button class="role-option" data-role="Manajer Klinik">Manajer</button>
+            <button class="role-option" data-role="Pasien">Pasien</button>
+          </div>
+        </div>
+
+        <form id="login-form" class="login-form" autocomplete="off" aria-label="Login form">
+          <label class="field-label">Username
+            <input id="username" type="text" placeholder="Masukkan username" />
+          </label>
+
+          <label class="field-label">Password
+            <input id="password" type="password" placeholder="Password (bebas untuk demo)" />
+          </label>
+
+          <p class="selected-role">Role terpilih: <strong id="selected-role">Petugas Administrasi</strong></p>
+
+          <div class="actions">
+            <button type="submit" class="btn btn-primary" id="btn-login">
+              Masuk ke Sistem <span class="btn-arrow">→</span>
+            </button>
+            <button type="button" id="btn-fill-demo" class="btn btn-outline">Isi Demo</button>
+          </div>
+
+          <p id="login-error" class="login-error" role="alert" aria-live="polite"></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- TRANSITION OVERLAY (animasi saat masuk) -->
+    <div id="login-overlay" class="overlay hidden" aria-hidden="true">
+      <div class="overlay-center">
+        <div class="spinner"></div>
+        <div class="overlay-text">Memuat dashboard...</div>
+      </div>
+    </div>
+
+    <!-- DASHBOARD AREA -->
+    <section id="main-screen" class="screen screen-main" aria-hidden="true">
+      <header class="navbar">
+        <div class="nav-left">
+          <div class="nav-brand">
+            <div class="logo-small">+</div>
+            <div class="nav-title">Klinik Sentosa</div>
+          </div>
+
+          <nav class="nav-links" id="nav-links" aria-label="Main navigation">
+            <!-- links will be set by JS depending on role -->
+          </nav>
+        </div>
+
+        <div class="nav-right">
+          <div id="nav-user-role" class="nav-user-role"></div>
+          <div id="nav-username" class="nav-username"></div>
+          <button id="logout-btn" class="btn btn-outline small">Keluar</button>
+        </div>
+      </header>
+
+      <main id="dashboard-root" class="dashboard-root">
+        <!-- role-specific dashboard containers -->
+        <div id="dash-petugas" class="role-dashboard hidden" data-role="Petugas Administrasi"></div>
+        <div id="dash-dokter" class="role-dashboard hidden" data-role="Dokter"></div>
+        <div id="dash-perawat" class="role-dashboard hidden" data-role="Perawat"></div>
+        <div id="dash-kasir" class="role-dashboard hidden" data-role="Kasir"></div>
+        <div id="dash-apoteker" class="role-dashboard hidden" data-role="Apoteker"></div>
+        <div id="dash-manajer" class="role-dashboard hidden" data-role="Manajer Klinik"></div>
+        <div id="dash-pasien" class="role-dashboard hidden" data-role="Pasien"></div>
+      </main>
+    </section>
+
+  </div>
+</body>
+</html>
