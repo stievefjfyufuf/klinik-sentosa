@@ -1,15 +1,12 @@
-/* app.js — Klinik Sentosa (Patched: safer, UX fixes, non-invasive enhancements)
-   Perubahan utama:
-   - auto-select role saat username diisi
-   - fokus pada field kosong saat submit
-   - safe JSON parsing untuk localStorage keys
-   - guard untuk user-logged-in agar TTS tidak dobel
-   - perbaikan datetime-local conversion
-   - normalisasi role mapping
-   - attach handlers langsung saat membuat elemen (di beberapa lokasi)
+/* app.patched.js — Klinik Sentosa (Original + Non-invasive Patches)
+   - mempertahankan kode asli (fungsi, UI, alur)
+   - menambahkan: DOM-ready init, ARIA/keyboard for roles, TTS UI sync,
+     prescription propagation (Dokter -> Apoteker), cross-tab sync hint,
+     event compatibility (patch:* + user-logged-in + ks-login-success)
+   - Jangan lupa backup file lama sebelum replace.
 */
 
-/* ---------- tiny DOM helpers ---------- */
+/* ---------- tiny DOM helpers (kept) ---------- */
 const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
 const create = (tag, attrs = {}, ...kids) => {
@@ -25,7 +22,7 @@ const create = (tag, attrs = {}, ...kids) => {
   return el;
 };
 
-/* ---------- Demo users ---------- */
+/* ---------- Demo users (kept) ---------- */
 const demoUsers = [
   { username: 'petugas1', role: 'Petugas Administrasi', name: 'Petugas A' },
   { username: 'dokter1', role: 'Dokter', name: 'dr. Andi' },
@@ -35,26 +32,26 @@ const demoUsers = [
   { username: 'pasien1', role: 'Pasien', name: 'Budi Santoso' }
 ];
 
-/* ---------- UI cache ---------- */
-const roleButtons = $$('.role-option') || [];
-const selectedRoleSpan = $('#selected-role');
-const loginForm = $('#login-form');
-const loginError = $('#login-error');
-const loginScreen = $('#login-screen');
-const mainScreen = $('#main-screen');
-const overlay = $('#login-overlay');
-const navLinks = $('#nav-links');
-const navUserRole = $('#nav-user-role');
-const navUsername = $('#nav-username');
-const logoutBtn = $('#logout-btn');
-const btnFillDemo = $('#btn-fill-demo');
+/* ---------- UI cache placeholders (will be set on DOMContentLoaded) ---------- */
+let roleButtons = [];
+let selectedRoleSpan = null;
+let loginForm = null;
+let loginError = null;
+let loginScreen = null;
+let mainScreen = null;
+let overlay = null;
+let navLinks = null;
+let navUserRole = null;
+let navUsername = null;
+let logoutBtn = null;
+let btnFillDemo = null;
 
-let selectedRole = roleButtons.find(b => b.classList.contains('role-option--active'))?.dataset.role || 'Petugas Administrasi';
+let selectedRole = 'Petugas Administrasi';
 let currentUser = null;           // logged user
 let appData = {};                // per-role data (payments, stock, prescriptions, appointments optional)
 const GLOBAL_PATIENTS_KEY = 'ks_global_patients'; // patients shared among relevant actors
 
-/* ---------- utilities ---------- */
+/* ---------- utilities (kept) ---------- */
 const escapeHtml = (s='') => String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const roleKey = role => role ? role.toLowerCase().replace(/\s+/g,'') : 'unknown';
@@ -65,10 +62,10 @@ function logActivity(text) {
   if (!appData) return;
   appData.logs = appData.logs || [];
   appData.logs.unshift({id: uid('log'), text, at: new Date().toISOString()});
-  saveDataForRole(currentUser.role);
+  saveDataForRole(currentUser && currentUser.role ? currentUser.role : 'system');
 }
 
-/* ---------- safe JSON parse for localStorage ---------- */
+/* ---------- safe JSON parse for localStorage (kept) ---------- */
 function safeJsonParseKey(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -82,7 +79,7 @@ function safeJsonParseKey(key, fallback) {
   }
 }
 
-/* ---------- modal + toast (unchanged behavior, robustified) ---------- */
+/* ---------- modal + toast (kept) ---------- */
 function ensureShells() {
   if (!$('#ks-modal-root')) {
     const modal = create('div',{id:'ks-modal-root', class:'ks-modal-root hidden'});
@@ -119,7 +116,77 @@ function toast(msg, opts={timeout:2500}) {
   }, opts.timeout || 2000);
 }
 
-/* ---------- role selector ---------- */
+/* ---------- DOM-ready init (role buttons, demo, accessibility, cache) ---------- */
+document.addEventListener('DOMContentLoaded', () => {
+  // cache DOM nodes (safe after DOMContentLoaded)
+  roleButtons = $$('.role-option') || [];
+  selectedRoleSpan = $('#selected-role');
+  loginForm = $('#login-form');
+  loginError = $('#login-error');
+  loginScreen = $('#login-screen');
+  mainScreen = $('#main-screen');
+  overlay = $('#login-overlay');
+  navLinks = $('#nav-links');
+  navUserRole = $('#nav-user-role');
+  navUsername = $('#nav-username');
+  logoutBtn = $('#logout-btn');
+  btnFillDemo = $('#btn-fill-demo');
+
+  // ensure initial selectedRole is in sync with UI
+  selectedRole = roleButtons.find(b => b.classList.contains('role-option--active'))?.dataset.role || 'Petugas Administrasi';
+  if (selectedRoleSpan) selectedRoleSpan.textContent = selectedRole;
+
+  // role buttons: click + keyboard + aria
+  roleButtons.forEach((btn, idx) => {
+    btn.setAttribute('role','button');
+    btn.setAttribute('tabindex','0');
+    btn.setAttribute('aria-pressed', btn.classList.contains('role-option--active') ? 'true' : 'false');
+
+    btn.addEventListener('click', () => {
+      roleButtons.forEach(r => { r.classList.remove('role-option--active'); r.setAttribute('aria-pressed','false'); });
+      btn.classList.add('role-option--active');
+      btn.setAttribute('aria-pressed','true');
+      selectedRole = btn.dataset.role;
+      if (selectedRoleSpan) selectedRoleSpan.textContent = selectedRole;
+    });
+
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); btn.click(); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); roleButtons[(idx+1)%roleButtons.length].focus(); }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); roleButtons[(idx-1+roleButtons.length)%roleButtons.length].focus(); }
+    });
+  });
+
+  // demo fill button feedback
+  if (btnFillDemo) {
+    btnFillDemo.addEventListener('click', () => {
+      const demo = demoUsers.find(u => u.role.toLowerCase() === selectedRole.toLowerCase());
+      if (demo) {
+        $('#username').value = demo.username;
+        $('#password').value = 'demo';
+        if (loginError) loginError.textContent = '';
+      } else {
+        if (loginError) loginError.textContent = 'Tidak ada demo user untuk role ini.';
+        setTimeout(()=> { if (loginError) loginError.textContent = ''; }, 2600);
+      }
+    });
+  }
+
+  // Sync TTS toggle UI state for styling & accessibility (if injected)
+  const ttsBtn = document.getElementById('tts-toggle');
+  if (ttsBtn) {
+    const enabled = localStorage.getItem('klinik_sentosa_tts_enabled') !== "false";
+    if (enabled) { ttsBtn.classList.add('toggled'); ttsBtn.setAttribute('aria-pressed','true'); ttsBtn.textContent = 'TTS: ON'; }
+    else { ttsBtn.classList.remove('toggled'); ttsBtn.setAttribute('aria-pressed','false'); ttsBtn.textContent = 'TTS: OFF'; }
+
+    ttsBtn.addEventListener('click', () => {
+      const isOn = ttsBtn.classList.toggle('toggled');
+      ttsBtn.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+    });
+  }
+});
+
+/* ---------- role selector (kept fallback, in case DOM ready wasn't used earlier) ---------- */
 roleButtons.forEach(btn => {
   btn.addEventListener('click', () => {
     roleButtons.forEach(r => r.classList.remove('role-option--active'));
@@ -129,7 +196,7 @@ roleButtons.forEach(btn => {
   });
 });
 
-/* ---------- demo fill ---------- */
+/* ---------- demo fill (kept fallback) ---------- */
 if (btnFillDemo) {
   btnFillDemo.addEventListener('click', () => {
     const demo = demoUsers.find(u => u.role.toLowerCase() === selectedRole.toLowerCase());
@@ -143,7 +210,7 @@ if (btnFillDemo) {
   });
 }
 
-/* ---------- auto-select role based on username (UX) ---------- */
+/* ---------- auto-select role based on username (kept) ---------- */
 $('#username')?.addEventListener('blur', () => {
   try {
     const val = $('#username').value.trim();
@@ -161,13 +228,13 @@ $('#username')?.addEventListener('blur', () => {
   } catch(e){ /* noop */ }
 });
 
-/* ---------- auth helper ---------- */
+/* ---------- auth helper (kept) ---------- */
 function findDemoUser(username){
   if (!username) return null;
   return demoUsers.find(u => u.username.toLowerCase() === username.toLowerCase());
 }
 
-/* ---------- GLOBAL patients helpers (use safe parse) ---------- */
+/* ---------- GLOBAL patients helpers (kept) ---------- */
 function loadGlobalPatients(){
   try {
     const parsed = safeJsonParseKey(GLOBAL_PATIENTS_KEY, null);
@@ -183,7 +250,7 @@ function saveGlobalPatients(list){
   } catch(e){ console.warn('saveGlobalPatients fail', e); }
 }
 
-/* ---------- per-role data store (use safe parse) ---------- */
+/* ---------- per-role data store (kept) ---------- */
 function loadDataForRole(role){
   const k = dataKeyForRole(role);
   try {
@@ -211,10 +278,10 @@ function saveDataForRole(role){
   } catch(e){ console.warn('saveDataForRole fail', e); }
 }
 
-/* ---------- modal + list helpers improved: attach handlers directly where possible ---------- */
+/* ---------- modal + list helpers improved: attach handlers directly where possible (kept) ---------- */
 
 /* ---------- login handler (with focus on empty fields & guarded dispatch for voice) ---------- */
-if (loginForm) {
+if (typeof loginForm !== 'undefined' && loginForm) {
   loginForm.addEventListener('submit', (e) => {
     e.preventDefault();
     if (loginError) loginError.textContent = '';
@@ -268,19 +335,48 @@ if (loginForm) {
 
     toast(`Selamat datang, ${user.name}`);
 
-    // --- PATCH: dispatch login event untuk voice / integrasi lain (non-invasive) ---
-    // guard to avoid duplicate notifications (double TTS)
+    // --- PATCH: dispatch login events for other patches/listeners ---
     setTimeout(() => {
       const detail = { name: user.name || user.username, role: user.role, username: user.username };
-      if (!window.__ks_voice_notified) {
-        try {
+      try {
+        // avoid duplicate notifications
+        if (!window.__ks_voice_notified) {
           document.dispatchEvent(new CustomEvent('user-logged-in', { detail }));
           document.dispatchEvent(new CustomEvent('ks-login-success', { detail }));
+          // compatibility events used by patch-additions / patch-voice
+          document.dispatchEvent(new CustomEvent('patch:loginAttempt', { detail }));
+          document.dispatchEvent(new CustomEvent('patch:loginSubmitted', { detail }));
+          // older naming variant for window
+          window.dispatchEvent(new CustomEvent('patch:loginAttempt', { detail }));
+          window.dispatchEvent(new CustomEvent('patch:loginSubmitted', { detail }));
           window.__ks_voice_notified = true;
-        } catch(e) { console.warn('dispatch user-logged-in failed', e); }
-      }
+        }
+      } catch (e) { console.warn('dispatch login events failed', e); }
     }, 350);
     // --- end PATCH ---
+  });
+} else {
+  // If loginForm binding wasn't present at initial parse, wait until DOMContentLoaded to bind (defensive)
+  document.addEventListener('DOMContentLoaded', () => {
+    const lf = $('#login-form');
+    if (!lf) return;
+    lf.addEventListener('submit', (e) => {
+      // duplicate logic is intentionally lightweight — original binding above will handle most cases.
+      e.preventDefault();
+      const username = ($('#username')?.value || '').trim();
+      const password = ($('#password')?.value || '').trim();
+      if (!username || !password) { if ($('#login-error')) $('#login-error').textContent = 'Username dan password tidak boleh kosong.'; return; }
+      const user = findDemoUser(username);
+      if (!user) { if ($('#login-error')) $('#login-error').textContent = 'User tidak ditemukan.'; return; }
+      sessionStorage.setItem('ks_user', JSON.stringify(user)); currentUser = user; loadGlobalPatients(); loadDataForRole(currentUser.role); prepareDashboardFor(currentUser);
+      toast(`Selamat datang, ${user.name}`);
+      setTimeout(()=> {
+        try {
+          const detail = { name: user.name || user.username, role: user.role, username: user.username };
+          if (!window.__ks_voice_notified) { document.dispatchEvent(new CustomEvent('user-logged-in',{detail})); window.__ks_voice_notified = true; }
+        } catch(e){}
+      },350);
+    });
   });
 }
 
@@ -301,9 +397,29 @@ if (logoutBtn) {
     });
     logoutBtn.dataset.bound = '1';
   }
+} else {
+  // defensive: bind on DOMContentLoaded if necessary
+  document.addEventListener('DOMContentLoaded', () => {
+    const lb = $('#logout-btn');
+    if (!lb) return;
+    if (!lb.dataset.bound) {
+      lb.addEventListener('click', () => {
+        sessionStorage.removeItem('ks_user');
+        if (mainScreen) { mainScreen.style.display = 'none'; mainScreen.classList.remove('screen--active'); }
+        if (loginScreen) { loginScreen.style.display = ''; loginScreen.classList.add('screen--active'); loginScreen.style.opacity = '1'; loginScreen.style.transform = 'none'; }
+        if (navLinks) navLinks.innerHTML = '';
+        if (navUsername) navUsername.textContent = '';
+        if (navUserRole) navUserRole.textContent = '';
+        appData = {};
+        toast('Anda telah logout');
+        window.__ks_voice_notified = false;
+      });
+      lb.dataset.bound = '1';
+    }
+  });
 }
 
-/* ---------- nav links render ---------- */
+/* ---------- nav links render (kept) ---------- */
 function renderNavLinks(role) {
   if (!navLinks) return;
   navLinks.innerHTML = '';
@@ -321,13 +437,23 @@ function renderNavLinks(role) {
   addLink('Tentang', ()=> showAbout());
 }
 
-/* ---------- prepare dashboard main ---------- */
+/* ---------- prepare dashboard main (kept + patched sync hook) ---------- */
 function prepareDashboardFor(user){
   if (!user) return;
   if (navUserRole) navUserRole.textContent = user.role;
   if (navUsername) navUsername.textContent = `• ${user.name || user.username}`;
 
-  loadDataForRole(user.role);
+  // If user is Apoteker, ensure prescriptions are synced from all roles
+  try {
+    if (user.role && user.role.toLowerCase() === 'apoteker') {
+      // sync merged prescriptions into Apoteker storage before loading
+      try { syncAllPrescriptionsForRole('Apoteker'); } catch(e) {}
+      loadDataForRole('Apoteker');
+    } else {
+      loadDataForRole(user.role);
+    }
+  } catch(e){ loadDataForRole(user.role); }
+
   renderNavLinks(user.role);
 
   $$('.role-dashboard').forEach(d => d.classList.add('hidden'));
@@ -346,7 +472,7 @@ function prepareDashboardFor(user){
   }
 }
 
-/* ---------- map role -> container (normalized) ---------- */
+/* ---------- map role -> container (kept) ---------- */
 function getDashContainerByRoleKey(key){
   const normalized = (key||'').trim().toLowerCase();
   const map = {
@@ -365,7 +491,7 @@ function getDashContainerByRoleKey(key){
   return el;
 }
 
-/* ---------- helpers: datetime-local conversion (local timezone safe) ---------- */
+/* ---------- helpers: datetime-local conversion (kept) ---------- */
 function toInputDatetimeLocal(dateInput) {
   if (!dateInput) return '';
   const d = new Date(dateInput);
@@ -379,16 +505,14 @@ function toInputDatetimeLocal(dateInput) {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 }
 
-/* ---------- FEATURES implementing Use Case Scenario (mostly unchanged, but safer) ---------- */
-
-/* ---------- PATIENTS (now GLOBAL) ---------- */
+/* ---------- PATIENTS (kept) ---------- */
 function openPatientList() {
   const patients = loadGlobalPatients();
   const html = create('div', {class:'ks-listwrap'});
   html.appendChild(create('h3', {class:'card-title'}, 'Daftar Pasien (Global)'));
 
   const actionsRow = create('div', {class:'ks-list-actions'});
-  if (currentUser.role === 'Petugas Administrasi') {
+  if (currentUser && currentUser.role === 'Petugas Administrasi') {
     const addBtn = create('button', {class:'btn btn-primary', id:'ks-btn-newpatient'}, 'Tambah Pasien');
     addBtn.addEventListener('click', ()=> showPatientForm());
     actionsRow.appendChild(addBtn);
@@ -406,7 +530,7 @@ function openPatientList() {
       const btnView = create('button', {class:'action-btn small'}, 'Lihat');
       btnView.addEventListener('click', ()=> showPatientDetails(p.id));
       meta.appendChild(btnView);
-      if (currentUser.role === 'Petugas Administrasi') {
+      if (currentUser && currentUser.role === 'Petugas Administrasi') {
         const btnEdit = create('button', {class:'action-btn small'}, 'Edit');
         btnEdit.addEventListener('click', ()=> showPatientForm(p.id));
         const btnDel = create('button', {class:'action-btn small'}, 'Hapus');
@@ -444,7 +568,7 @@ function showPatientDetails(id) {
   const recSection = create('div', {}, create('h4', {}, 'Rekam Medis:'));
   if (records.length) {
     const ul = create('ul', {});
-    records.forEach(r => ul.appendChild(create('li', {}, `${new Date(r.datetime).toLocaleString()} — ${escapeHtml(r.doctor)}: ${escapeHtml(r.notes.substring(0,120))}`)));
+    records.forEach(r => ul.appendChild(create('li', {}, `${new Date(r.datetime).toLocaleString()} — ${escapeHtml(r.doctor)}: ${escapeHtml((r.notes||'').substring(0,120))}`)));
     recSection.appendChild(ul);
   } else {
     recSection.appendChild(create('div', {class:'ks-empty'}, 'Belum ada rekam medis.'));
@@ -452,7 +576,7 @@ function showPatientDetails(id) {
   html.appendChild(recSection);
 
   const btnRow = create('div', {style:'margin-top:12px'});
-  if (['Dokter','Perawat'].includes(currentUser.role)) {
+  if (currentUser && ['Dokter','Perawat'].includes(currentUser.role)) {
     const addBtn = create('button',{class:'btn btn-primary', id:'ks-add-med'}, 'Tambah Rekam Medis');
     addBtn.addEventListener('click', ()=> showMedicalRecordForm(id));
     btnRow.appendChild(addBtn);
@@ -466,7 +590,7 @@ function showPatientDetails(id) {
 }
 
 function showPatientForm(id) {
-  if (currentUser.role !== 'Petugas Administrasi') { toast('Hanya Petugas Administrasi dapat menambah atau mengedit pasien'); return; }
+  if (!(currentUser && currentUser.role === 'Petugas Administrasi')) { toast('Hanya Petugas Administrasi dapat menambah atau mengedit pasien'); return; }
   const list = loadGlobalPatients();
   const editing = !!id;
   const p = editing ? list.find(x=>x.id===id) : {};
@@ -506,7 +630,7 @@ function showPatientForm(id) {
   });
 }
 
-/* ---------- MEDICAL RECORDS (Pemeriksaan oleh Dokter) ---------- */
+/* ---------- MEDICAL RECORDS (kept) ---------- */
 function addMedicalRecord(patientId, doctorName, notes) {
   const rec = {id: uid('med'), patientId, doctor: doctorName, notes, datetime: new Date().toISOString()};
   appData.medicalRecords = appData.medicalRecords || [];
@@ -531,7 +655,7 @@ function getAllMedicalRecordsForPatient(patientId) {
   return results.sort((a,b)=> new Date(b.datetime) - new Date(a.datetime));
 }
 function showMedicalRecordForm(patientId) {
-  if (!['Dokter','Perawat'].includes(currentUser.role)) { toast('Hanya Dokter/Perawat dapat menambah rekam medis'); return; }
+  if (!currentUser || !['Dokter','Perawat'].includes(currentUser.role)) { toast('Hanya Dokter/Perawat dapat menambah rekam medis'); return; }
   const form = create('form', {class:'ks-form', id:'ks-med-form'});
   form.appendChild(create('h3', {class:'card-title'}, 'Tambah Rekam Medis'));
   const sel = create('select',{id:'ks-med-patient'});
@@ -558,7 +682,7 @@ function showMedicalRecordForm(patientId) {
   });
 }
 
-/* ---------- APPOINTMENTS (Penjadwalan Dokter) ---------- */
+/* ---------- APPOINTMENTS (kept) ---------- */
 function openAppointments() {
   loadDataForRole(currentUser.role);
   const items = appData.appointments || [];
@@ -644,7 +768,7 @@ function showAppointmentForm(id) {
   });
 }
 
-/* ---------- PAYMENTS (Kasir) ---------- */
+/* ---------- PAYMENTS (kept) ---------- */
 function openPayments() {
   loadDataForRole(currentUser.role);
   const items = appData.payments || [];
@@ -702,7 +826,7 @@ function showPaymentForm() {
   });
 }
 
-/* ---------- STOCK (Apoteker) ---------- */
+/* ---------- STOCK (kept) ---------- */
 function openStock() {
   loadDataForRole(currentUser.role);
   const stock = appData.stock || [];
@@ -777,9 +901,18 @@ function showStockForm(id) {
   });
 }
 
-/* ---------- PRESCRIPTIONS (Dokter + Apoteker) ---------- */
+/* ---------- PRESCRIPTIONS (kept but patched to propagate) ---------- */
 function openPrescriptions(){
-  loadDataForRole(currentUser.role);
+  // If current user is Apoteker, ensure their storage is synced from all roles first
+  try {
+    if (currentUser && currentUser.role && currentUser.role.toLowerCase() === 'apoteker') {
+      syncAllPrescriptionsForRole('Apoteker');
+      loadDataForRole('Apoteker');
+    } else {
+      loadDataForRole(currentUser.role);
+    }
+  } catch(e){ loadDataForRole(currentUser.role); }
+
   const list = appData.prescriptions || [];
   const html = create('div', {class:'ks-listwrap'});
   html.appendChild(create('h3', {class:'card-title'}, 'Resep & Obat'));
@@ -833,11 +966,20 @@ function showPrescriptionForm() {
     saveDataForRole(currentUser.role);
     logActivity(`Resep dibuat untuk pasien ${pid}`);
     toast('Resep tersimpan');
+
+    // --- PATCH: notify & propagate prescription to Apoteker + Petugas ---
+    try {
+      // dispatch inline event for our propagation listener
+      document.dispatchEvent(new CustomEvent('prescription-saved-inline', { detail: rec }));
+      try { localStorage.setItem('ks_presc_last_sync', JSON.stringify({ts:Date.now(), id: rec.id})); } catch(e){}
+    } catch(e){ console.warn('presc save dispatch fail', e); }
+    // --- end patch ---
+
     hideModal();
   });
 }
 
-/* ---------- REPORTS (Manajer) ---------- */
+/* ---------- REPORTS (kept) ---------- */
 function openReports() {
   loadDataForRole(currentUser.role);
   const totalPatients = (loadGlobalPatients()||[]).length;
@@ -859,7 +1001,7 @@ function openReports() {
   showModal(html);
 }
 
-/* ---------- helpers: home/about ---------- */
+/* ---------- helpers: home/about (kept) ---------- */
 function showHome() {
   const root = getDashContainerByRoleKey(currentUser.role);
   if (!root) return;
@@ -880,7 +1022,7 @@ function showAbout(){
   root.innerHTML = `<div class="card-title">Tentang Klinik Sentosa</div><p class="kv-row">Sistem demo mengikuti use-case: Pendaftaran, Penjadwalan, Pemeriksaan, Resep, Pembayaran, Stok, Laporan, Akses Data Pasien.</p>`;
 }
 
-/* ---------- role dashboards ---------- */
+/* ---------- role dashboards (kept) ---------- */
 function buildPetugasDashboard() {
   const root = getDashContainerByRoleKey('Petugas Administrasi'); if (!root) return;
   root.innerHTML = `
@@ -978,16 +1120,16 @@ function buildPasienDashboard(){
   $('#ks-new-queue')?.addEventListener('click', ()=> { if (typeof showNewQueueForm === 'function') showNewQueueForm(); else toast('Fitur daftar antrian belum tersedia'); });
 }
 
-/* ---------- session restore on load ---------- */
+/* ---------- session restore on load (kept + patched notify) ---------- */
 document.addEventListener('DOMContentLoaded', ()=> {
   ensureShells();
   const sess = sessionStorage.getItem('ks_user');
   if (sess) {
     try {
       currentUser = JSON.parse(sess);
-      const matchBtn = roleButtons.find(b => b.dataset.role && b.dataset.role.toLowerCase() === (currentUser.role||'').toLowerCase());
+      const matchBtn = $$('.role-option').find(b => b.dataset.role && b.dataset.role.toLowerCase() === (currentUser.role||'').toLowerCase());
       if (matchBtn) {
-        roleButtons.forEach(r=> r.classList.remove('role-option--active'));
+        $$('.role-option').forEach(r=> r.classList.remove('role-option--active'));
         matchBtn.classList.add('role-option--active');
         selectedRole = matchBtn.dataset.role;
         if (selectedRoleSpan) selectedRoleSpan.textContent = selectedRole;
@@ -1003,6 +1145,9 @@ document.addEventListener('DOMContentLoaded', ()=> {
           const detail = { name: currentUser.name || currentUser.username, role: currentUser.role, username: currentUser.username };
           if (!window.__ks_voice_notified) {
             document.dispatchEvent(new CustomEvent('user-logged-in', { detail }));
+            // compatibility
+            document.dispatchEvent(new CustomEvent('patch:loginAttempt', { detail }));
+            document.dispatchEvent(new CustomEvent('patch:loginSubmitted', { detail }));
             window.__ks_voice_notified = true;
           }
         } catch(e) { console.warn('dispatch user-logged-in on restore failed', e); }
@@ -1013,7 +1158,7 @@ document.addEventListener('DOMContentLoaded', ()=> {
   }
 });
 
-/* expose small debug object */
+/* expose small debug object (kept) */
 window.__ks = {
   loadDataForRole, saveDataForRole, appData,
   dataKeyForRole, roleKey, loadGlobalPatients, saveGlobalPatients
@@ -1021,7 +1166,7 @@ window.__ks = {
 
 /* ------------------ PATCH ADDITIONS (non-invasive) ------------------ */
 
-/* 1) Patient helpers & handlers (safe additions) */
+/* 1) Patient helpers & handlers (kept + exposed) */
 function getOrCreatePatientForCurrentUser() {
   if (!currentUser) return null;
   const name = currentUser.name || currentUser.username || '';
@@ -1122,7 +1267,7 @@ function showNewQueueForm() {
   });
 }
 
-/* 2) Panel enter/exit animation utility (applies across roles) */
+/* 2) Panel enter/exit animation utility (kept) */
 (function(){
   function animateShowPanel(newEl) {
     if (!newEl) return;
@@ -1168,7 +1313,7 @@ function showNewQueueForm() {
   }, true);
 })();
 
-/* 3) Real-time stat animation toggle (Beranda) */
+/* 3) Real-time stat animation toggle (kept) */
 let realtimeStatsInterval = null;
 let realtimeAnimating = false;
 
@@ -1216,4 +1361,133 @@ window.showNewQueueForm = showNewQueueForm;
 window.startRealtimeStats = startRealtimeStats;
 window.stopRealtimeStats = stopRealtimeStats;
 
-/* end of app.js */
+/* ------------------ PATCH: Propagate & sync prescriptions across roles ------------------ */
+/*
+  Tujuan:
+   - Saat Dokter membuat resep, salinan resep otomatis masuk ke penyimpanan role "Apoteker".
+   - Ketika Apoteker membuka Resep (atau dashboardnya), sinkronisasi memastikan resep dari Dokter
+     tampil di Apoteker (merge & dedup).
+   - Tidak menghapus kode lama; ini hanya menambahkan langkah propgasi/sinkronisasi.
+*/
+
+function propagatePrescriptionToRole(targetRole, presc) {
+  if (!targetRole || !presc || !presc.id) return;
+  const key = dataKeyForRole(targetRole);
+  let targetData = safeJsonParseKey(key, null);
+  if (!targetData) {
+    targetData = { appointments: [], payments: [], prescriptions: [], stock: [], logs: [], medicalRecords: [] };
+  }
+  targetData.prescriptions = Array.isArray(targetData.prescriptions) ? targetData.prescriptions : [];
+  // deduplicate by id
+  const exists = targetData.prescriptions.find(p => p.id === presc.id);
+  if (!exists) {
+    // make a shallow copy and annotate origin
+    const copy = Object.assign({}, presc, { propagatedFrom: currentUser ? currentUser.role : 'system', propagatedAt: new Date().toISOString() });
+    targetData.prescriptions.unshift(copy);
+    try { localStorage.setItem(key, JSON.stringify(targetData)); } catch(e){ console.warn('propagatePrescriptionToRole save fail', e); }
+  }
+}
+
+function syncAllPrescriptionsForRole(role) {
+  if (!role) return;
+  // collect prescriptions from all role keys
+  const roles = ['Petugas Administrasi','Dokter','Perawat','Kasir','Apoteker','Manajer Klinik','Pasien'];
+  const collected = [];
+  roles.forEach(r => {
+    try {
+      const raw = safeJsonParseKey(dataKeyForRole(r), null);
+      if (!raw || !Array.isArray(raw.prescriptions)) return;
+      raw.prescriptions.forEach(p => {
+        if (p && p.id) collected.push(p);
+      });
+    } catch(e) { /* noop */ }
+  });
+  // deduplicate by id (keep newest by datetime if available)
+  const byId = {};
+  collected.forEach(p => {
+    if (!p || !p.id) return;
+    if (!byId[p.id]) byId[p.id] = p;
+    else {
+      const existing = byId[p.id];
+      const a = new Date(existing.datetime || existing.propagatedAt || 0).getTime();
+      const b = new Date(p.datetime || p.propagatedAt || 0).getTime();
+      if (b > a) byId[p.id] = p;
+    }
+  });
+  const merged = Object.values(byId).sort((a,b) => (new Date(b.datetime||b.propagatedAt||0) - new Date(a.datetime||a.propagatedAt||0)));
+
+  // write merged prescriptions into the target role storage
+  const key = dataKeyForRole(role);
+  let roleData = safeJsonParseKey(key, null);
+  if (!roleData) {
+    roleData = { appointments: [], payments: [], prescriptions: [], stock: [], logs: [], medicalRecords: [] };
+  }
+  // keep other fields intact, replace prescriptions with merged (but ensure we don't lose local-only prescriptions)
+  const localPresc = Array.isArray(roleData.prescriptions) ? roleData.prescriptions : [];
+  // Merge with localPresc by id (local overrides if same id)
+  const mergedById = {};
+  merged.forEach(p => mergedById[p.id] = p);
+  localPresc.forEach(lp => mergedById[lp.id] = lp);
+  const finalPresc = Object.values(mergedById).sort((a,b) => (new Date(b.datetime||b.propagatedAt||0) - new Date(a.datetime||a.propagatedAt||0)));
+  roleData.prescriptions = finalPresc;
+  try { localStorage.setItem(key, JSON.stringify(roleData)); } catch(e){ console.warn('syncAllPrescriptionsForRole save fail', e); }
+  // if the current appData corresponds to this role, update in-memory too
+  if (currentUser && currentUser.role && currentUser.role.toLowerCase() === role.toLowerCase()) {
+    loadDataForRole(role); // reload into appData
+  }
+}
+
+/* Hook into prescription creation: enhance existing showPrescriptionForm() submit flow.
+   We listen for custom event 'prescription-saved-inline' which we dispatch from the submit handler.
+*/
+document.addEventListener('prescription-saved-inline', (ev) => {
+  try {
+    const rec = ev.detail;
+    if (!rec || !rec.id) return;
+    // propagate to Apoteker
+    propagatePrescriptionToRole('Apoteker', rec);
+    // optionally also propagate to Petugas Administrasi so they can see prescriptions
+    propagatePrescriptionToRole('Petugas Administrasi', rec);
+    // dispatch a global event for UI updates
+    try { window.dispatchEvent(new CustomEvent('prescription-created', { detail: rec })); } catch(e){}
+  } catch(e) { console.warn('prescription-saved-inline handler fail', e); }
+});
+
+/* Ensure Apoteker sees merged prescriptions when opening prescriptions and when dashboard prepared */
+const _orig_openPrescriptions = openPrescriptions;
+openPrescriptions = function(...args) {
+  try {
+    if (currentUser && currentUser.role && currentUser.role.toLowerCase() === 'apoteker') {
+      syncAllPrescriptionsForRole('Apoteker');
+      loadDataForRole('Apoteker');
+    }
+  } catch(e){ console.warn('pre-sync openPrescriptions failed', e); }
+  return _orig_openPrescriptions.apply(this, args);
+};
+
+const _orig_prepareDashboardFor = prepareDashboardFor;
+prepareDashboardFor = function(user) {
+  try {
+    if (user && user.role && user.role.toLowerCase() === 'apoteker') {
+      syncAllPrescriptionsForRole('Apoteker');
+      loadDataForRole('Apoteker');
+    }
+  } catch(e){ console.warn('pre-sync prepareDashboardFor failed', e); }
+  return _orig_prepareDashboardFor.apply(this, arguments);
+};
+
+/* Bonus: listen for cross-window localStorage hint to reload if another tab changed prescriptions */
+window.addEventListener('storage', (e) => {
+  try {
+    if (e.key === 'ks_presc_last_sync') {
+      // another tab updated prescriptions; if I'm apoteker, resync
+      if (currentUser && currentUser.role && currentUser.role.toLowerCase() === 'apoteker') {
+        syncAllPrescriptionsForRole('Apoteker');
+        loadDataForRole('Apoteker');
+        toast('Data resep tersinkronisasi (pembaruan baru)');
+      }
+    }
+  } catch(e) {}
+});
+
+/* End of app.patched.js */

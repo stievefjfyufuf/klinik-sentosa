@@ -8,19 +8,22 @@
   <link rel="stylesheet" href="style.css">
   <!-- tambahan patch CSS (non-invasive, berada setelah style utama) -->
   <link rel="stylesheet" href="patch-additions.css">
-  <script defer src="app.js"></script>
-  <!-- patch-additions.js akan memuat setelah app.js -->
+  <!-- NOTE: gunakan file JS patched yang saya kirim sebelumnya -->
+  <script defer src="app.patched.full.js"></script>
+  <!-- patch-additions dan patch-voice harus dimuat setelah main script -->
   <script defer src="patch-additions.js"></script>
+  <script defer src="patch-voice.js"></script>
+  <link rel="stylesheet" href="patch-voice.css">
 </head>
 <body>
   <div id="app">
     <!-- LOGIN -->
-    <section id="login-screen" class="screen screen-login screen--active">
-      <div class="login-bg"></div>
-      <div class="login-card">
+    <section id="login-screen" class="screen screen-login screen--active" aria-hidden="false">
+      <div class="login-bg" aria-hidden="true"></div>
+      <div class="login-card" role="region" aria-label="Login card">
         <div class="login-left">
           <div class="login-brand">
-            <div class="logo-square">+</div>
+            <div class="logo-square" aria-hidden="true">+</div>
             <div class="brand-text">
               <h1>Klinik Sentosa</h1>
               <p class="sub">Sistem Manajemen Klinik Terpadu</p>
@@ -30,30 +33,30 @@
           <p class="lead">Pilih role lalu masuk ke sistem</p>
 
           <div class="role-group" aria-label="Pilih Role" id="role-group">
-            <button class="role-option role-option--active" data-role="Petugas Administrasi">Petugas</button>
-            <button class="role-option" data-role="Dokter">Dokter</button>
-            <button class="role-option" data-role="Perawat">Perawat</button>
-            <button class="role-option" data-role="Kasir">Kasir</button>
-            <button class="role-option" data-role="Apoteker">Apoteker</button>
-            <button class="role-option" data-role="Manajer Klinik">Manajer</button>
-            <button class="role-option" data-role="Pasien">Pasien</button>
+            <button type="button" class="role-option role-option--active" data-role="Petugas Administrasi">Petugas</button>
+            <button type="button" class="role-option" data-role="Dokter">Dokter</button>
+            <button type="button" class="role-option" data-role="Perawat">Perawat</button>
+            <button type="button" class="role-option" data-role="Kasir">Kasir</button>
+            <button type="button" class="role-option" data-role="Apoteker">Apoteker</button>
+            <button type="button" class="role-option" data-role="Manajer Klinik">Manajer</button>
+            <button type="button" class="role-option" data-role="Pasien">Pasien</button>
           </div>
         </div>
 
-        <form id="login-form" class="login-form" autocomplete="off" aria-label="Login form">
+        <form id="login-form" class="login-form" autocomplete="off" aria-label="Login form" role="form">
           <label class="field-label">Username
-            <input id="username" type="text" placeholder="Masukkan username" />
+            <input id="username" name="username" type="text" placeholder="Masukkan username" autocomplete="username" />
           </label>
 
           <label class="field-label">Password
-            <input id="password" type="password" placeholder="Password (bebas untuk demo)" />
+            <input id="password" name="password" type="password" placeholder="Password (bebas untuk demo)" autocomplete="current-password" />
           </label>
 
-          <p class="selected-role">Role terpilih: <strong id="selected-role">Petugas Administrasi</strong></p>
+          <p class="selected-role">Role terpilih: <strong id="selected-role" aria-live="polite">Petugas Administrasi</strong></p>
 
           <div class="actions">
             <button type="submit" class="btn btn-primary" id="btn-login">
-              Masuk ke Sistem <span class="btn-arrow">→</span>
+              Masuk ke Sistem <span class="btn-arrow" aria-hidden="true">→</span>
             </button>
             <button type="button" id="btn-fill-demo" class="btn btn-outline">Isi Demo</button>
           </div>
@@ -64,49 +67,56 @@
     </section>
 
     <!-- TRANSITION OVERLAY (animasi saat masuk) -->
-    <div id="login-overlay" class="overlay hidden" aria-hidden="true">
+    <div id="login-overlay" class="overlay hidden" aria-hidden="true" role="status" aria-live="polite">
       <div class="overlay-center">
-        <div class="spinner"></div>
+        <div class="spinner" aria-hidden="true"></div>
         <div class="overlay-text">Memuat dashboard...</div>
       </div>
     </div>
 
     <!-- DASHBOARD AREA -->
-    <section id="main-screen" class="screen screen-main" aria-hidden="true">
-      <header class="navbar">
+    <section id="main-screen" class="screen screen-main hidden" aria-hidden="true">
+      <header class="navbar" role="navigation" aria-label="Main navigation">
         <div class="nav-left">
           <div class="nav-brand">
-            <div class="logo-small">+</div>
+            <div class="logo-small" aria-hidden="true">+</div>
             <div class="nav-title">Klinik Sentosa</div>
           </div>
 
-          <nav class="nav-links" id="nav-links" aria-label="Main navigation">
+          <nav class="nav-links" id="nav-links" aria-label="Main links">
             <!-- links will be set by JS depending on role -->
           </nav>
         </div>
 
         <div class="nav-right">
-          <div id="nav-user-role" class="nav-user-role"></div>
-          <div id="nav-username" class="nav-username"></div>
-          <button id="logout-btn" class="btn btn-outline small">Keluar</button>
+          <div id="nav-user-role" class="nav-user-role" aria-hidden="true"></div>
+          <div id="nav-username" class="nav-username" aria-hidden="true"></div>
+          <button id="logout-btn" class="btn btn-outline small" type="button">Keluar</button>
         </div>
       </header>
 
-      <main id="dashboard-root" class="dashboard-root">
+      <main id="dashboard-root" class="dashboard-root" role="main">
         <!-- role-specific dashboard containers -->
-        <div id="dash-petugas" class="role-dashboard hidden" data-role="Petugas Administrasi"></div>
-        <div id="dash-dokter" class="role-dashboard hidden" data-role="Dokter"></div>
-        <div id="dash-perawat" class="role-dashboard hidden" data-role="Perawat"></div>
-        <div id="dash-kasir" class="role-dashboard hidden" data-role="Kasir"></div>
-        <div id="dash-apoteker" class="role-dashboard hidden" data-role="Apoteker"></div>
-        <div id="dash-manajer" class="role-dashboard hidden" data-role="Manajer Klinik"></div>
-        <div id="dash-pasien" class="role-dashboard hidden" data-role="Pasien"></div>
+        <div id="dash-petugas" class="role-dashboard hidden" data-role="Petugas Administrasi" aria-hidden="true"></div>
+        <div id="dash-dokter" class="role-dashboard hidden" data-role="Dokter" aria-hidden="true"></div>
+        <div id="dash-perawat" class="role-dashboard hidden" data-role="Perawat" aria-hidden="true"></div>
+        <div id="dash-kasir" class="role-dashboard hidden" data-role="Kasir" aria-hidden="true"></div>
+        <div id="dash-apoteker" class="role-dashboard hidden" data-role="Apoteker" aria-hidden="true"></div>
+        <div id="dash-manajer" class="role-dashboard hidden" data-role="Manajer Klinik" aria-hidden="true"></div>
+        <div id="dash-pasien" class="role-dashboard hidden" data-role="Pasien" aria-hidden="true"></div>
       </main>
     </section>
-    <link rel="stylesheet" href="patch-voice.css">
-<script src="patch-voice.js" defer></script>
 
+    <!-- roots untuk toast & modal (JS akan gunakan ini) -->
+    <div id="ks-toast-root" class="ks-toast-root" aria-hidden="true"></div>
+    <div id="ks-modal-root" class="ks-modal-root hidden" aria-hidden="true">
+      <div class="ks-modal-backdrop" aria-hidden="true"></div>
+      <div class="ks-modal-panel" role="dialog" aria-modal="true"></div>
+    </div>
 
   </div>
+
+  <!-- Jika Anda menyimpan JS dengan nama lain, ubah src di atas -->
+  <!-- Tidak perlu menambah script di sini — semua dipanggil via <head> dengan defer -->
 </body>
 </html>
