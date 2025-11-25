@@ -1,9 +1,12 @@
-/* app.js — Klinik Sentosa (Updated)
-   - Removed long loading delay and overlay; replaced with smooth transition animations
-   - Patients are now GLOBAL (shared) so Petugas Admin, Dokter, Perawat can access the same patients
-   - Medical records implemented (dokter/perawat can add/view)
-   - Other modules still per-role (payments, stock, prescriptions) but usecases respected
-   - Modal & toast utilities remain; UI unchanged otherwise
+/* app.js — Klinik Sentosa (Patched: safer, UX fixes, non-invasive enhancements)
+   Perubahan utama:
+   - auto-select role saat username diisi
+   - fokus pada field kosong saat submit
+   - safe JSON parsing untuk localStorage keys
+   - guard untuk user-logged-in agar TTS tidak dobel
+   - perbaikan datetime-local conversion
+   - normalisasi role mapping
+   - attach handlers langsung saat membuat elemen (di beberapa lokasi)
 */
 
 /* ---------- tiny DOM helpers ---------- */
@@ -15,6 +18,7 @@ const create = (tag, attrs = {}, ...kids) => {
     if (k === 'class') el.className = v;
     else if (k === 'html') el.innerHTML = v;
     else if (k === 'value') el.value = v;
+    else if (k === 'id') el.id = v;
     else el.setAttribute(k, v);
   });
   kids.flat().forEach(k => { if (typeof k === 'string') el.appendChild(document.createTextNode(k)); else if (k) el.appendChild(k); });
@@ -56,7 +60,29 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const roleKey = role => role ? role.toLowerCase().replace(/\s+/g,'') : 'unknown';
 const dataKeyForRole = r => `ks_data_${roleKey(r)}`;
 
-/* ---------- modal + toast (unchanged) ---------- */
+function uid(prefix='id') { return `${prefix}_${Math.random().toString(36).slice(2,9)}`; }
+function logActivity(text) {
+  if (!appData) return;
+  appData.logs = appData.logs || [];
+  appData.logs.unshift({id: uid('log'), text, at: new Date().toISOString()});
+  saveDataForRole(currentUser.role);
+}
+
+/* ---------- safe JSON parse for localStorage ---------- */
+function safeJsonParseKey(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch(e) {
+    console.warn('[safeJsonParseKey] corrupt key:', key, e);
+    try { localStorage.setItem(`${key}_corrupt_${Date.now()}`, localStorage.getItem(key)); } catch(e2){}
+    localStorage.removeItem(key);
+    return fallback;
+  }
+}
+
+/* ---------- modal + toast (unchanged behavior, robustified) ---------- */
 function ensureShells() {
   if (!$('#ks-modal-root')) {
     const modal = create('div',{id:'ks-modal-root', class:'ks-modal-root hidden'});
@@ -117,22 +143,38 @@ if (btnFillDemo) {
   });
 }
 
+/* ---------- auto-select role based on username (UX) ---------- */
+$('#username')?.addEventListener('blur', () => {
+  try {
+    const val = $('#username').value.trim();
+    if (!val) return;
+    const u = findDemoUser(val);
+    if (u) {
+      const btn = roleButtons.find(b => b.dataset.role && b.dataset.role.toLowerCase() === u.role.toLowerCase());
+      if (btn) {
+        roleButtons.forEach(r => r.classList.remove('role-option--active'));
+        btn.classList.add('role-option--active');
+        selectedRole = btn.dataset.role;
+        if (selectedRoleSpan) selectedRoleSpan.textContent = selectedRole;
+      }
+    }
+  } catch(e){ /* noop */ }
+});
+
 /* ---------- auth helper ---------- */
 function findDemoUser(username){
   if (!username) return null;
   return demoUsers.find(u => u.username.toLowerCase() === username.toLowerCase());
 }
 
-/* ---------- GLOBAL patients helpers ----------
-   Patients are shared among Petugas Admin, Dokter, Perawat, and optionally Pasien (view own)
-*/
+/* ---------- GLOBAL patients helpers (use safe parse) ---------- */
 function loadGlobalPatients(){
   try {
-    const raw = localStorage.getItem(GLOBAL_PATIENTS_KEY);
-    if (raw) return JSON.parse(raw);
+    const parsed = safeJsonParseKey(GLOBAL_PATIENTS_KEY, null);
+    if (parsed !== null) return parsed;
   } catch(e){ console.warn('loadGlobalPatients fail', e); }
   const init = [];
-  localStorage.setItem(GLOBAL_PATIENTS_KEY, JSON.stringify(init));
+  try { localStorage.setItem(GLOBAL_PATIENTS_KEY, JSON.stringify(init)); } catch(e){}
   return init;
 }
 function saveGlobalPatients(list){
@@ -141,13 +183,13 @@ function saveGlobalPatients(list){
   } catch(e){ console.warn('saveGlobalPatients fail', e); }
 }
 
-/* ---------- per-role data store (payments, stock, prescriptions, appointments optional) ---------- */
+/* ---------- per-role data store (use safe parse) ---------- */
 function loadDataForRole(role){
   const k = dataKeyForRole(role);
   try {
-    const raw = localStorage.getItem(k);
-    if (raw) {
-      appData = JSON.parse(raw);
+    const parsed = safeJsonParseKey(k, null);
+    if (parsed !== null) {
+      appData = parsed;
       return appData;
     }
   } catch(e){ console.warn('loadDataForRole fail', e); }
@@ -157,7 +199,7 @@ function loadDataForRole(role){
     prescriptions: [],
     stock: [],
     logs: [],
-    medicalRecords: [] // per-role storage for records if needed (doctors will save here too)
+    medicalRecords: []
   };
   saveDataForRole(role);
   return appData;
@@ -168,15 +210,10 @@ function saveDataForRole(role){
     localStorage.setItem(k, JSON.stringify(appData));
   } catch(e){ console.warn('saveDataForRole fail', e); }
 }
-function uid(prefix='id') { return `${prefix}_${Math.random().toString(36).slice(2,9)}`; }
-function logActivity(text) {
-  if (!appData) return;
-  appData.logs = appData.logs || [];
-  appData.logs.unshift({id: uid('log'), text, at: new Date().toISOString()});
-  saveDataForRole(currentUser.role);
-}
 
-/* ---------- login handler (no artificial loading) ---------- */
+/* ---------- modal + list helpers improved: attach handlers directly where possible ---------- */
+
+/* ---------- login handler (with focus on empty fields & guarded dispatch for voice) ---------- */
 if (loginForm) {
   loginForm.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -186,16 +223,26 @@ if (loginForm) {
     const password = ($('#password')?.value || '').trim(); // demo only
     if (!username || !password) {
       if (loginError) loginError.textContent = 'Username dan password tidak boleh kosong.';
+      $('#username')?.focus();
       return;
     }
 
     const user = findDemoUser(username);
     if (!user) {
       if (loginError) loginError.textContent = 'User tidak ditemukan (gunakan demo username).';
+      $('#username')?.focus();
       return;
     }
     if (user.role.toLowerCase() !== selectedRole.toLowerCase()) {
-      if (loginError) loginError.textContent = `Role terpilih (${selectedRole}) tidak sesuai dengan user (${user.role}). Pilih role yang sesuai.`;
+      if (loginError) loginError.textContent = `Role terpilih (${selectedRole}) tidak sesuai dengan user (${user.role}). Pilih role yang sesuai.`; 
+      // auto-select correct role to help user
+      const btn = roleButtons.find(b => b.dataset.role && b.dataset.role.toLowerCase() === user.role.toLowerCase());
+      if (btn) {
+        roleButtons.forEach(r => r.classList.remove('role-option--active'));
+        btn.classList.add('role-option--active');
+        selectedRole = btn.dataset.role;
+        if (selectedRoleSpan) selectedRoleSpan.textContent = selectedRole;
+      }
       return;
     }
 
@@ -220,6 +267,20 @@ if (loginForm) {
     }, 240);
 
     toast(`Selamat datang, ${user.name}`);
+
+    // --- PATCH: dispatch login event untuk voice / integrasi lain (non-invasive) ---
+    // guard to avoid duplicate notifications (double TTS)
+    setTimeout(() => {
+      const detail = { name: user.name || user.username, role: user.role, username: user.username };
+      if (!window.__ks_voice_notified) {
+        try {
+          document.dispatchEvent(new CustomEvent('user-logged-in', { detail }));
+          document.dispatchEvent(new CustomEvent('ks-login-success', { detail }));
+          window.__ks_voice_notified = true;
+        } catch(e) { console.warn('dispatch user-logged-in failed', e); }
+      }
+    }, 350);
+    // --- end PATCH ---
   });
 }
 
@@ -235,6 +296,8 @@ if (logoutBtn) {
       if (navUserRole) navUserRole.textContent = '';
       appData = {};
       toast('Anda telah logout');
+      // reset voice-notified guard
+      window.__ks_voice_notified = false;
     });
     logoutBtn.dataset.bound = '1';
   }
@@ -283,108 +346,144 @@ function prepareDashboardFor(user){
   }
 }
 
-/* ---------- map role -> container ---------- */
+/* ---------- map role -> container (normalized) ---------- */
 function getDashContainerByRoleKey(key){
+  const normalized = (key||'').trim().toLowerCase();
   const map = {
-    'Petugas Administrasi': '#dash-petugas',
-    'Dokter': '#dash-dokter',
-    'Perawat': '#dash-perawat',
-    'Kasir': '#dash-kasir',
-    'Apoteker': '#dash-apoteker',
-    'Manajer Klinik': '#dash-manajer',
-    'Pasien': '#dash-pasien'
+    'petugas administrasi':'#dash-petugas',
+    'dokter':'#dash-dokter',
+    'perawat':'#dash-perawat',
+    'kasir':'#dash-kasir',
+    'apoteker':'#dash-apoteker',
+    'manajer klinik':'#dash-manajer',
+    'pasien':'#dash-pasien'
   };
-  const sel = map[key];
+  const sel = map[normalized];
   if (!sel) return null;
   const el = $(sel);
   if (el) { el.innerHTML = ''; el.classList.remove('hidden'); el.classList.add('ks-anim-card'); setTimeout(()=> el.classList.remove('ks-anim-card'), 700); }
   return el;
 }
 
-/* ---------- FEATURES implementing Use Case Scenario ---------- */
+/* ---------- helpers: datetime-local conversion (local timezone safe) ---------- */
+function toInputDatetimeLocal(dateInput) {
+  if (!dateInput) return '';
+  const d = new Date(dateInput);
+  if (isNaN(d)) return '';
+  const pad = n => String(n).padStart(2,'0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth()+1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
+
+/* ---------- FEATURES implementing Use Case Scenario (mostly unchanged, but safer) ---------- */
 
 /* ---------- PATIENTS (now GLOBAL) ---------- */
 function openPatientList() {
   const patients = loadGlobalPatients();
-  const html = create('div', {class:'ks-listwrap'}, [
-    create('h3', {class:'card-title'}, 'Daftar Pasien (Global)'),
-    create('div', {class:'ks-list-actions'}, [
-      // only Petugas Admin can add patients (use case)
-      (currentUser.role === 'Petugas Administrasi') ? create('button', {class:'btn btn-primary', id:'ks-btn-newpatient'}, 'Tambah Pasien') : create('div', {style:'color:var(--muted)'}, 'Hanya Petugas Administrasi dapat menambah pasien')
-    ]),
-    create('div', {class:'ks-list'}, patients.length ? patients.map(p => {
-      return create('div', {class:'ks-list-item'}, [
-        create('div', {class:'ks-list-main'}, `${escapeHtml(p.name)} — ${escapeHtml(p.phone||'-')}`),
-        create('div', {class:'ks-list-meta'}, [
-          create('button', {class:'action-btn small', 'data-id':p.id}, 'Lihat'),
-          (currentUser.role === 'Petugas Administrasi') ? create('button', {class:'action-btn small', 'data-edit':p.id}, 'Edit') : null,
-          (currentUser.role === 'Petugas Administrasi') ? create('button', {class:'action-btn small', 'data-del':p.id}, 'Hapus') : null
-        ].filter(Boolean))
-      ]);
-    }) : create('div', {class:'ks-empty'}, 'Belum ada pasien.'))
-  ]);
-  showModal(html, {lock:false});
+  const html = create('div', {class:'ks-listwrap'});
+  html.appendChild(create('h3', {class:'card-title'}, 'Daftar Pasien (Global)'));
 
+  const actionsRow = create('div', {class:'ks-list-actions'});
   if (currentUser.role === 'Petugas Administrasi') {
-    $('#ks-btn-newpatient')?.addEventListener('click', ()=> showPatientForm());
+    const addBtn = create('button', {class:'btn btn-primary', id:'ks-btn-newpatient'}, 'Tambah Pasien');
+    addBtn.addEventListener('click', ()=> showPatientForm());
+    actionsRow.appendChild(addBtn);
+  } else {
+    actionsRow.appendChild(create('div', {style:'color:var(--muted)'}, 'Hanya Petugas Administrasi dapat menambah pasien'));
   }
-  $$('#ks-modal-root .ks-list-item .action-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-id') || btn.getAttribute('data-edit') || btn.getAttribute('data-del');
-      if (btn.getAttribute('data-id')) showPatientDetails(id);
-      else if (btn.getAttribute('data-edit')) showPatientForm(id);
-      else if (btn.getAttribute('data-del')) {
-        if (confirm('Hapus pasien ini?')) {
-          let list = loadGlobalPatients();
-          list = list.filter(x=>x.id!==id);
-          saveGlobalPatients(list);
-          toast('Pasien dihapus');
-          hideModal();
-        }
+  html.appendChild(actionsRow);
+
+  const listWrap = create('div', {class:'ks-list'});
+  if (patients.length) {
+    patients.forEach(p => {
+      const item = create('div', {class:'ks-list-item'});
+      item.appendChild(create('div', {class:'ks-list-main'}, `${escapeHtml(p.name)} — ${escapeHtml(p.phone||'-')}`));
+      const meta = create('div', {class:'ks-list-meta'});
+      const btnView = create('button', {class:'action-btn small'}, 'Lihat');
+      btnView.addEventListener('click', ()=> showPatientDetails(p.id));
+      meta.appendChild(btnView);
+      if (currentUser.role === 'Petugas Administrasi') {
+        const btnEdit = create('button', {class:'action-btn small'}, 'Edit');
+        btnEdit.addEventListener('click', ()=> showPatientForm(p.id));
+        const btnDel = create('button', {class:'action-btn small'}, 'Hapus');
+        btnDel.addEventListener('click', ()=> {
+          if (confirm('Hapus pasien ini?')) {
+            let list = loadGlobalPatients();
+            list = list.filter(x=>x.id!==p.id);
+            saveGlobalPatients(list);
+            toast('Pasien dihapus');
+            hideModal();
+          }
+        });
+        meta.appendChild(btnEdit);
+        meta.appendChild(btnDel);
       }
+      item.appendChild(meta);
+      listWrap.appendChild(item);
     });
-  });
+  } else {
+    listWrap.appendChild(create('div', {class:'ks-empty'}, 'Belum ada pasien.'));
+  }
+  html.appendChild(listWrap);
+  showModal(html, {lock:false});
 }
+
 function showPatientDetails(id) {
   const list = loadGlobalPatients();
   const p = list.find(x => x.id === id);
   if (!p) { toast('Pasien tidak ditemukan'); return; }
-  // show patient details and medical records quick access
   const records = getAllMedicalRecordsForPatient(id);
-  const html = create('div', {class:'ks-card'}, [
-    create('h3', {class:'card-title'}, `Detail: ${escapeHtml(p.name)}`),
-    create('div', {class:'kv-row'}, [create('div',{}, 'Telepon:'), create('div',{}, escapeHtml(p.phone||'-'))]),
-    create('div', {class:'kv-row'}, [create('div',{}, 'Tanggal Lahir:'), create('div',{}, escapeHtml(p.dob||'-'))]),
-    create('div', {}, create('h4', {}, 'Rekam Medis:'), records.length ? create('ul', {}, records.map(r => create('li', {}, `${new Date(r.datetime).toLocaleString()} — ${escapeHtml(r.doctor)}: ${escapeHtml(r.notes.substring(0,120))}`))) : create('div', {class:'ks-empty'}, 'Belum ada rekam medis.')),
-    create('div', {style:'margin-top:12px'}, [
-      // if dokter or perawat, allow to add medical record
-      (['Dokter','Perawat'].includes(currentUser.role)) ? create('button',{class:'btn btn-primary', id:'ks-add-med'}, 'Tambah Rekam Medis') : null,
-      create('button', {class:'btn btn-outline', id:'ks-btn-close'}, 'Tutup')
-    ].filter(Boolean))
-  ]);
+  const html = create('div', {class:'ks-card'});
+  html.appendChild(create('h3', {class:'card-title'}, `Detail: ${escapeHtml(p.name)}`));
+  html.appendChild(create('div', {class:'kv-row'}, [create('div',{}, 'Telepon:'), create('div',{}, escapeHtml(p.phone||'-'))]));
+  html.appendChild(create('div', {class:'kv-row'}, [create('div',{}, 'Tanggal Lahir:'), create('div',{}, escapeHtml(p.dob||'-'))]));
+  const recSection = create('div', {}, create('h4', {}, 'Rekam Medis:'));
+  if (records.length) {
+    const ul = create('ul', {});
+    records.forEach(r => ul.appendChild(create('li', {}, `${new Date(r.datetime).toLocaleString()} — ${escapeHtml(r.doctor)}: ${escapeHtml(r.notes.substring(0,120))}`)));
+    recSection.appendChild(ul);
+  } else {
+    recSection.appendChild(create('div', {class:'ks-empty'}, 'Belum ada rekam medis.'));
+  }
+  html.appendChild(recSection);
+
+  const btnRow = create('div', {style:'margin-top:12px'});
+  if (['Dokter','Perawat'].includes(currentUser.role)) {
+    const addBtn = create('button',{class:'btn btn-primary', id:'ks-add-med'}, 'Tambah Rekam Medis');
+    addBtn.addEventListener('click', ()=> showMedicalRecordForm(id));
+    btnRow.appendChild(addBtn);
+  }
+  const closeBtn = create('button', {class:'btn btn-outline', id:'ks-btn-close'}, 'Tutup');
+  closeBtn.addEventListener('click', hideModal);
+  btnRow.appendChild(closeBtn);
+  html.appendChild(btnRow);
+
   showModal(html);
-  $('#ks-btn-close').addEventListener('click', hideModal);
-  $('#ks-add-med')?.addEventListener('click', ()=> showMedicalRecordForm(id));
 }
+
 function showPatientForm(id) {
-  // only Petugas Admin allowed here
   if (currentUser.role !== 'Petugas Administrasi') { toast('Hanya Petugas Administrasi dapat menambah atau mengedit pasien'); return; }
   const list = loadGlobalPatients();
   const editing = !!id;
   const p = editing ? list.find(x=>x.id===id) : {};
-  const form = create('form', {class:'ks-form', id:'ks-patient-form'}, [
-    create('h3', {class:'card-title'}, editing ? 'Edit Pasien' : 'Tambah Pasien'),
-    create('label', {}, 'Nama', create('input', {type:'text', id:'ks-patient-name', value: p.name || ''})),
-    create('label', {}, 'Telepon', create('input', {type:'text', id:'ks-patient-phone', value: p.phone || ''})),
-    create('label', {}, 'Tanggal Lahir', create('input', {type:'date', id:'ks-patient-dob', value: p.dob || ''})),
-    create('label', {}, 'Catatan', create('textarea', {id:'ks-patient-notes'}, p.notes || '')),
-    create('div', {style:'margin-top:12px;display:flex;gap:8px'}, [
-      create('button', {type:'submit', class:'btn btn-primary'}, editing ? 'Simpan' : 'Buat'),
-      create('button', {type:'button', class:'btn btn-outline', id:'ks-pat-cancel'}, 'Batal')
-    ])
-  ]);
+  const form = create('form', {class:'ks-form', id:'ks-patient-form'});
+  form.appendChild(create('h3', {class:'card-title'}, editing ? 'Edit Pasien' : 'Tambah Pasien'));
+  form.appendChild(create('label', {}, 'Nama', create('input', {type:'text', id:'ks-patient-name', value: p.name || ''})));
+  form.appendChild(create('label', {}, 'Telepon', create('input', {type:'text', id:'ks-patient-phone', value: p.phone || ''})));
+  form.appendChild(create('label', {}, 'Tanggal Lahir', create('input', {type:'date', id:'ks-patient-dob', value: p.dob || ''})));
+  form.appendChild(create('label', {}, 'Catatan', create('textarea', {id:'ks-patient-notes'}, p.notes || '')));
+  const btnWrap = create('div', {style:'margin-top:12px;display:flex;gap:8px'});
+  const submitBtn = create('button', {type:'submit', class:'btn btn-primary'}, editing ? 'Simpan' : 'Buat');
+  const cancelBtn = create('button', {type:'button', class:'btn btn-outline', id:'ks-pat-cancel'}, 'Batal');
+  cancelBtn.addEventListener('click', hideModal);
+  btnWrap.appendChild(submitBtn); btnWrap.appendChild(cancelBtn);
+  form.appendChild(btnWrap);
+
   showModal(form);
-  $('#ks-pat-cancel').addEventListener('click', hideModal);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const name = $('#ks-patient-name').value.trim();
@@ -407,49 +506,46 @@ function showPatientForm(id) {
   });
 }
 
-/* ---------- MEDICAL RECORDS (Pemeriksaan oleh Dokter) ----------
-   Stored per-role (doctor's role) but also accessible via global query (getAllMedicalRecordsForPatient)
-*/
+/* ---------- MEDICAL RECORDS (Pemeriksaan oleh Dokter) ---------- */
 function addMedicalRecord(patientId, doctorName, notes) {
   const rec = {id: uid('med'), patientId, doctor: doctorName, notes, datetime: new Date().toISOString()};
-  // store in current role's appData.medicalRecords for audit/history
   appData.medicalRecords = appData.medicalRecords || [];
   appData.medicalRecords.unshift(rec);
   saveDataForRole(currentUser.role);
-  // also log
   logActivity(`Rekam medis: ${patientId} oleh ${doctorName}`);
   return rec;
 }
 function getAllMedicalRecordsForPatient(patientId) {
-  // search all role keys and gather medicalRecords for that patient (simulate shared access)
   const roles = ['Petugas Administrasi','Dokter','Perawat','Kasir','Apoteker','Manajer Klinik','Pasien'];
   let results = [];
   roles.forEach(r => {
     try {
-      const raw = localStorage.getItem(dataKeyForRole(r));
+      const raw = safeJsonParseKey(dataKeyForRole(r), null);
       if (!raw) return;
-      const d = JSON.parse(raw);
+      const d = raw;
       if (d && d.medicalRecords) {
-        results = results.concat(d.medicalRecords.filter(m => m.patientId === patientId));
+        results = results.concat(Array.isArray(d.medicalRecords) ? d.medicalRecords.filter(m => m.patientId === patientId) : []);
       }
     } catch(e){}
   });
-  // also include any server-wide list (none) — return sorted by date desc
   return results.sort((a,b)=> new Date(b.datetime) - new Date(a.datetime));
 }
 function showMedicalRecordForm(patientId) {
   if (!['Dokter','Perawat'].includes(currentUser.role)) { toast('Hanya Dokter/Perawat dapat menambah rekam medis'); return; }
-  const form = create('form', {class:'ks-form', id:'ks-med-form'}, [
-    create('h3', {class:'card-title'}, 'Tambah Rekam Medis'),
-    create('label', {}, 'Pasien', create('select',{id:'ks-med-patient'}, loadGlobalPatients().map(p => create('option',{value:p.id}, p.name)))),
-    create('label', {}, 'Catatan pemeriksaan', create('textarea',{id:'ks-med-notes'})),
-    create('div', {style:'margin-top:12px;display:flex;gap:8px'}, [
-      create('button',{type:'submit', class:'btn btn-primary'}, 'Simpan'),
-      create('button',{type:'button', class:'btn btn-outline', id:'ks-med-cancel'}, 'Batal')
-    ])
-  ]);
+  const form = create('form', {class:'ks-form', id:'ks-med-form'});
+  form.appendChild(create('h3', {class:'card-title'}, 'Tambah Rekam Medis'));
+  const sel = create('select',{id:'ks-med-patient'});
+  (loadGlobalPatients().map(p => sel.appendChild(create('option',{value:p.id}, p.name))));
+  form.appendChild(create('label', {}, 'Pasien', sel));
+  form.appendChild(create('label', {}, 'Catatan pemeriksaan', create('textarea',{id:'ks-med-notes'})));
+  const btnWrap = create('div', {style:'margin-top:12px;display:flex;gap:8px'});
+  const saveBtn = create('button',{type:'submit', class:'btn btn-primary'}, 'Simpan');
+  const cancelBtn = create('button',{type:'button', class:'btn btn-outline', id:'ks-med-cancel'}, 'Batal');
+  cancelBtn.addEventListener('click', hideModal);
+  btnWrap.appendChild(saveBtn); btnWrap.appendChild(cancelBtn);
+  form.appendChild(btnWrap);
+
   showModal(form);
-  $('#ks-med-cancel').addEventListener('click', hideModal);
   if (patientId) $('#ks-med-patient').value = patientId;
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -463,44 +559,42 @@ function showMedicalRecordForm(patientId) {
 }
 
 /* ---------- APPOINTMENTS (Penjadwalan Dokter) ---------- */
-/* Appointments are per-role but created here for demo; Petugas Admin & Dokter can manage */
 function openAppointments() {
   loadDataForRole(currentUser.role);
   const items = appData.appointments || [];
-  const html = create('div', {class:'ks-listwrap'}, [
-    create('h3', {class:'card-title'}, 'Janji Temu'),
-    create('div', {class:'ks-list-actions'}, [
-      create('button', {class:'btn btn-primary', id:'ks-btn-newappt'}, 'Buat Janji')
-    ]),
-    create('div', {class:'ks-list'}, items.length ? items.map(a => {
-      const pat = (loadGlobalPatients()||[]).find(p=>p.id===a.patientId) || {name:'-'} ;
-      return create('div', {class:'ks-list-item'}, [
-        create('div', {class:'ks-list-main'}, `${escapeHtml(pat.name)} — ${new Date(a.datetime).toLocaleString()}`),
-        create('div', {class:'ks-list-meta'}, [
-          create('button', {class:'action-btn small', 'data-edit':a.id}, 'Edit'),
-          create('button', {class:'action-btn small', 'data-del':a.id}, 'Hapus'),
-          create('button', {class:'action-btn small', 'data-call':a.id}, 'Panggil')
-        ])
-      ]);
-    }) : create('div', {class:'ks-empty'}, 'Belum ada janji.'))
-  ]);
-  showModal(html);
-  $('#ks-btn-newappt')?.addEventListener('click', ()=> showAppointmentForm());
-  $$('#ks-modal-root .ks-list-item .action-btn').forEach(btn => {
-    btn.addEventListener('click', ()=> {
-      const id = btn.getAttribute('data-edit') || btn.getAttribute('data-del') || btn.getAttribute('data-call');
-      if (btn.getAttribute('data-edit')) showAppointmentForm(id);
-      else if (btn.getAttribute('data-del')) {
+  const html = create('div', {class:'ks-listwrap'});
+  html.appendChild(create('h3', {class:'card-title'}, 'Janji Temu'));
+  const actions = create('div', {class:'ks-list-actions'});
+  const newBtn = create('button', {class:'btn btn-primary', id:'ks-btn-newappt'}, 'Buat Janji');
+  newBtn.addEventListener('click', ()=> showAppointmentForm());
+  actions.appendChild(newBtn); html.appendChild(actions);
+  const listWrap = create('div', {class:'ks-list'});
+  if (items.length) {
+    items.forEach(a => {
+      const pat = (loadGlobalPatients()||[]).find(p=>p.id===a.patientId) || {name:'-'};
+      const item = create('div', {class:'ks-list-item'});
+      item.appendChild(create('div', {class:'ks-list-main'}, `${escapeHtml(pat.name)} — ${new Date(a.datetime).toLocaleString()}`));
+      const meta = create('div', {class:'ks-list-meta'});
+      const btnEdit = create('button', {class:'action-btn small'}, 'Edit');
+      btnEdit.addEventListener('click', ()=> showAppointmentForm(a.id));
+      const btnDel = create('button', {class:'action-btn small'}, 'Hapus');
+      btnDel.addEventListener('click', ()=> {
         if (confirm('Hapus janji?')) {
-          appData.appointments = (appData.appointments||[]).filter(x=>x.id!==id); saveDataForRole(currentUser.role);
+          appData.appointments = (appData.appointments||[]).filter(x=>x.id!==a.id); saveDataForRole(currentUser.role);
           toast('Janji dihapus');
           hideModal();
         }
-      } else if (btn.getAttribute('data-call')) {
-        toast('Panggilan antrian: ' + id);
-      }
+      });
+      const btnCall = create('button', {class:'action-btn small'}, 'Panggil');
+      btnCall.addEventListener('click', ()=> toast('Panggilan antrian: ' + a.id));
+      meta.appendChild(btnEdit); meta.appendChild(btnDel); meta.appendChild(btnCall);
+      item.appendChild(meta); listWrap.appendChild(item);
     });
-  });
+  } else {
+    listWrap.appendChild(create('div', {class:'ks-empty'}, 'Belum ada janji.'));
+  }
+  html.appendChild(listWrap);
+  showModal(html);
 }
 function showAppointmentForm(id) {
   if (!(loadGlobalPatients() && loadGlobalPatients().length)) {
@@ -510,22 +604,25 @@ function showAppointmentForm(id) {
   }
   const editing = !!id;
   const a = editing ? (appData.appointments||[]).find(x=>x.id===id) : {};
-  const form = create('form', {class:'ks-form', id:'ks-appt-form'}, [
-    create('h3', {class:'card-title'}, editing ? 'Edit Janji' : 'Buat Janji'),
-    create('label', {}, 'Pilih Pasien', create('select', {id:'ks-appt-patient'}, (loadGlobalPatients()||[]).map(p => create('option', {value:p.id}, p.name)))),
-    create('label', {}, 'Dokter (nama)', create('input', {type:'text', id:'ks-appt-doctor', value: a.doctor || ''})),
-    create('label', {}, 'Tanggal & Waktu', create('input', {type:'datetime-local', id:'ks-appt-dt', value: a.datetime ? new Date(a.datetime).toISOString().slice(0,16) : ''})),
-    create('div', {style:'margin-top:12px;display:flex;gap:8px'}, [
-      create('button', {type:'submit', class:'btn btn-primary'}, editing ? 'Simpan' : 'Buat'),
-      create('button', {type:'button', class:'btn btn-outline', id:'ks-appt-cancel'}, 'Batal')
-    ])
-  ]);
+  const form = create('form', {class:'ks-form', id:'ks-appt-form'});
+  form.appendChild(create('h3', {class:'card-title'}, editing ? 'Edit Janji' : 'Buat Janji'));
+  const sel = create('select', {id:'ks-appt-patient'});
+  (loadGlobalPatients()||[]).forEach(p => sel.appendChild(create('option', {value:p.id}, p.name)));
+  form.appendChild(create('label', {}, 'Pilih Pasien', sel));
+  form.appendChild(create('label', {}, 'Dokter (nama)', create('input', {type:'text', id:'ks-appt-doctor', value: a.doctor || ''})));
+  form.appendChild(create('label', {}, 'Tanggal & Waktu', create('input', {type:'datetime-local', id:'ks-appt-dt', value: a.datetime ? toInputDatetimeLocal(a.datetime) : ''})));
+  const btnWrap = create('div', {style:'margin-top:12px;display:flex;gap:8px'});
+  const saveBtn = create('button', {type:'submit', class:'btn btn-primary'}, editing ? 'Simpan' : 'Buat');
+  const cancelBtn = create('button', {type:'button', class:'btn btn-outline', id:'ks-appt-cancel'}, 'Batal');
+  cancelBtn.addEventListener('click', hideModal);
+  btnWrap.appendChild(saveBtn); btnWrap.appendChild(cancelBtn);
+  form.appendChild(btnWrap);
+
   showModal(form);
-  $('#ks-appt-cancel').addEventListener('click', hideModal);
   if (editing) {
     $('#ks-appt-patient').value = a.patientId;
     $('#ks-appt-doctor').value = a.doctor || '';
-    $('#ks-appt-dt').value = a.datetime ? new Date(a.datetime).toISOString().slice(0,16) : '';
+    $('#ks-appt-dt').value = a.datetime ? toInputDatetimeLocal(a.datetime) : '';
   }
   form.addEventListener('submit', (ev)=>{
     ev.preventDefault();
@@ -548,40 +645,48 @@ function showAppointmentForm(id) {
 }
 
 /* ---------- PAYMENTS (Kasir) ---------- */
-/* Keep per-role payments but Petugas Admin may also create payments */
 function openPayments() {
   loadDataForRole(currentUser.role);
   const items = appData.payments || [];
-  const html = create('div', {class:'ks-listwrap'}, [
-    create('h3', {class:'card-title'}, 'Pembayaran'),
-    create('div', {class:'ks-list-actions'}, [ create('button', {class:'btn btn-primary', id:'ks-new-pay'}, 'Buat Pembayaran') ]),
-    create('div', {class:'ks-list'}, items.length ? items.map(p => {
-      const pat = (loadGlobalPatients()||[]).find(x=>x.id===p.patientId) || {name:'-'} ;
-      return create('div', {class:'ks-list-item'}, [
-        create('div', {class:'ks-list-main'}, `${escapeHtml(pat.name)} — Rp ${p.amount}`),
-        create('div', {class:'ks-list-meta'}, [
-          create('div', {}, new Date(p.datetime).toLocaleString())
-        ])
-      ]);
-    }) : create('div', {class:'ks-empty'}, 'Belum ada pembayaran.'))
-  ]);
+  const html = create('div', {class:'ks-listwrap'});
+  html.appendChild(create('h3', {class:'card-title'}, 'Pembayaran'));
+  const actions = create('div', {class:'ks-list-actions'});
+  const newBtn = create('button', {class:'btn btn-primary', id:'ks-new-pay'}, 'Buat Pembayaran');
+  newBtn.addEventListener('click', ()=> showPaymentForm());
+  actions.appendChild(newBtn); html.appendChild(actions);
+  const listWrap = create('div', {class:'ks-list'});
+  if (items.length) {
+    items.forEach(p => {
+      const pat = (loadGlobalPatients()||[]).find(x=>x.id===p.patientId) || {name:'-'};
+      const item = create('div', {class:'ks-list-item'});
+      item.appendChild(create('div', {class:'ks-list-main'}, `${escapeHtml(pat.name)} — Rp ${p.amount}`));
+      const meta = create('div', {class:'ks-list-meta'});
+      meta.appendChild(create('div', {}, new Date(p.datetime).toLocaleString()));
+      item.appendChild(meta); listWrap.appendChild(item);
+    });
+  } else {
+    listWrap.appendChild(create('div', {class:'ks-empty'}, 'Belum ada pembayaran.'));
+  }
+  html.appendChild(listWrap);
   showModal(html);
-  $('#ks-new-pay')?.addEventListener('click', ()=> showPaymentForm());
 }
 function showPaymentForm() {
   if (!(loadGlobalPatients() && loadGlobalPatients().length)) { toast('Tambah pasien dulu'); return; }
-  const form = create('form', {class:'ks-form', id:'ks-pay-form'}, [
-    create('h3', {class:'card-title'}, 'Pembayaran Baru'),
-    create('label', {}, 'Pilih Pasien', create('select', {id:'ks-pay-patient'}, (loadGlobalPatients()||[]).map(p => create('option', {value:p.id}, p.name)))),
-    create('label', {}, 'Jumlah (Rp)', create('input', {type:'number', id:'ks-pay-amount', value:''})),
-    create('label', {}, 'Metode', create('input', {type:'text', id:'ks-pay-method', value:'Tunai'})),
-    create('div', {style:'margin-top:12px;display:flex;gap:8px'}, [
-      create('button', {type:'submit', class:'btn btn-primary'}, 'Bayar'),
-      create('button', {type:'button', class:'btn btn-outline', id:'ks-pay-cancel'}, 'Batal')
-    ])
-  ]);
+  const form = create('form', {class:'ks-form', id:'ks-pay-form'});
+  form.appendChild(create('h3', {class:'card-title'}, 'Pembayaran Baru'));
+  const sel = create('select', {id:'ks-pay-patient'});
+  (loadGlobalPatients()||[]).forEach(p=> sel.appendChild(create('option',{value:p.id}, p.name)));
+  form.appendChild(create('label', {}, 'Pilih Pasien', sel));
+  form.appendChild(create('label', {}, 'Jumlah (Rp)', create('input', {type:'number', id:'ks-pay-amount', value:''})));
+  form.appendChild(create('label', {}, 'Metode', create('input', {type:'text', id:'ks-pay-method', value:'Tunai'})));
+  const btnWrap = create('div', {style:'margin-top:12px;display:flex;gap:8px'});
+  const payBtn = create('button', {type:'submit', class:'btn btn-primary'}, 'Bayar');
+  const cancelBtn = create('button', {type:'button', class:'btn btn-outline', id:'ks-pay-cancel'}, 'Batal');
+  cancelBtn.addEventListener('click', hideModal);
+  btnWrap.appendChild(payBtn); btnWrap.appendChild(cancelBtn);
+  form.appendChild(btnWrap);
+
   showModal(form);
-  $('#ks-pay-cancel').addEventListener('click', hideModal);
   form.addEventListener('submit', (e)=> {
     e.preventDefault();
     const patientId = $('#ks-pay-patient').value;
@@ -601,51 +706,54 @@ function showPaymentForm() {
 function openStock() {
   loadDataForRole(currentUser.role);
   const stock = appData.stock || [];
-  const html = create('div', {class:'ks-listwrap'}, [
-    create('h3', {class:'card-title'}, 'Manajemen Stok Obat'),
-    create('div', {class:'ks-list-actions'}, [ create('button', {class:'btn btn-primary', id:'ks-stock-new'}, 'Tambah Obat') ]),
-    create('div', {class:'ks-list'}, stock.length ? stock.map(s => {
-      return create('div', {class:'ks-list-item'}, [
-        create('div', {class:'ks-list-main'}, `${escapeHtml(s.name)} — ${s.qty} ${s.unit || ''}`),
-        create('div', {class:'ks-list-meta'}, [
-          create('button', {class:'action-btn small','data-edit':s.id}, 'Edit'),
-          create('button', {class:'action-btn small','data-del':s.id}, 'Hapus')
-        ])
-      ]);
-    }) : create('div', {class:'ks-empty'}, 'Belum ada data stok.'))
-  ]);
-  showModal(html);
-  $('#ks-stock-new')?.addEventListener('click', ()=> showStockForm());
-  $$('#ks-modal-root .ks-list-item .action-btn').forEach(b => {
-    b.addEventListener('click', ()=> {
-      const id = b.getAttribute('data-edit') || b.getAttribute('data-del');
-      if (b.getAttribute('data-edit')) showStockForm(id);
-      else if (b.getAttribute('data-del')) {
+  const html = create('div', {class:'ks-listwrap'});
+  html.appendChild(create('h3', {class:'card-title'}, 'Manajemen Stok Obat'));
+  const actions = create('div', {class:'ks-list-actions'});
+  const newBtn = create('button', {class:'btn btn-primary', id:'ks-stock-new'}, 'Tambah Obat');
+  newBtn.addEventListener('click', ()=> showStockForm());
+  actions.appendChild(newBtn); html.appendChild(actions);
+  const listWrap = create('div', {class:'ks-list'});
+  if (stock.length) {
+    stock.forEach(s => {
+      const item = create('div', {class:'ks-list-item'});
+      item.appendChild(create('div', {class:'ks-list-main'}, `${escapeHtml(s.name)} — ${s.qty} ${s.unit || ''}`));
+      const meta = create('div', {class:'ks-list-meta'});
+      const btnEdit = create('button', {class:'action-btn small'}, 'Edit');
+      btnEdit.addEventListener('click', ()=> showStockForm(s.id));
+      const btnDel = create('button', {class:'action-btn small'}, 'Hapus');
+      btnDel.addEventListener('click', ()=> {
         if (confirm('Hapus item stok?')) {
-          appData.stock = (appData.stock||[]).filter(x=>x.id!==id); saveDataForRole(currentUser.role);
+          appData.stock = (appData.stock||[]).filter(x=>x.id!==s.id); saveDataForRole(currentUser.role);
           toast('Item stok dihapus');
           hideModal();
         }
-      }
+      });
+      meta.appendChild(btnEdit); meta.appendChild(btnDel);
+      item.appendChild(meta); listWrap.appendChild(item);
     });
-  });
+  } else {
+    listWrap.appendChild(create('div', {class:'ks-empty'}, 'Belum ada data stok.'));
+  }
+  html.appendChild(listWrap);
+  showModal(html);
 }
 function showStockForm(id) {
   const editing = !!id;
   const s = editing ? (appData.stock||[]).find(x=>x.id===id) : {};
-  const form = create('form', {class:'ks-form', id:'ks-stock-form'}, [
-    create('h3', {class:'card-title'}, editing ? 'Edit Item Stok' : 'Tambah Item Stok'),
-    create('label', {}, 'Nama Obat', create('input', {id:'ks-stock-name', value: s.name || ''})),
-    create('label', {}, 'Jumlah', create('input', {id:'ks-stock-qty', type:'number', value: s.qty || 0})),
-    create('label', {}, 'Satuan', create('input', {id:'ks-stock-unit', value: s.unit || ''})),
-    create('label', {}, 'Ambang (min)', create('input', {id:'ks-stock-min', type:'number', value: s.minThreshold || 0})),
-    create('div', {style:'margin-top:12px;display:flex;gap:8px'}, [
-      create('button', {type:'submit', class:'btn btn-primary'}, 'Simpan'),
-      create('button', {type:'button', class:'btn btn-outline', id:'ks-stock-cancel'}, 'Batal')
-    ])
-  ]);
+  const form = create('form', {class:'ks-form', id:'ks-stock-form'});
+  form.appendChild(create('h3', {class:'card-title'}, editing ? 'Edit Item Stok' : 'Tambah Item Stok'));
+  form.appendChild(create('label', {}, 'Nama Obat', create('input', {id:'ks-stock-name', value: s.name || ''})));
+  form.appendChild(create('label', {}, 'Jumlah', create('input', {id:'ks-stock-qty', type:'number', value: s.qty || 0})));
+  form.appendChild(create('label', {}, 'Satuan', create('input', {id:'ks-stock-unit', value: s.unit || ''})));
+  form.appendChild(create('label', {}, 'Ambang (min)', create('input', {id:'ks-stock-min', type:'number', value: s.minThreshold || 0})));
+  const btnWrap = create('div', {style:'margin-top:12px;display:flex;gap:8px'});
+  const saveBtn = create('button', {type:'submit', class:'btn btn-primary'}, 'Simpan');
+  const cancelBtn = create('button', {type:'button', class:'btn btn-outline', id:'ks-stock-cancel'}, 'Batal');
+  cancelBtn.addEventListener('click', hideModal);
+  btnWrap.appendChild(saveBtn); btnWrap.appendChild(cancelBtn);
+  form.appendChild(btnWrap);
+
   showModal(form);
-  $('#ks-stock-cancel').addEventListener('click', hideModal);
   form.addEventListener('submit', (ev)=> {
     ev.preventDefault();
     const name = $('#ks-stock-name').value.trim();
@@ -673,45 +781,48 @@ function showStockForm(id) {
 function openPrescriptions(){
   loadDataForRole(currentUser.role);
   const list = appData.prescriptions || [];
-  const html = create('div', {class:'ks-listwrap'}, [
-    create('h3', {class:'card-title'}, 'Resep & Obat'),
-    create('div', {class:'ks-list-actions'}, [ create('button', {class:'btn btn-primary', id:'ks-presc-new'}, 'Buat Resep') ]),
-    create('div', {class:'ks-list'}, list.length ? list.map(p => {
+  const html = create('div', {class:'ks-listwrap'});
+  html.appendChild(create('h3', {class:'card-title'}, 'Resep & Obat'));
+  const actions = create('div', {class:'ks-list-actions'});
+  const newBtn = create('button', {class:'btn btn-primary', id:'ks-presc-new'}, 'Buat Resep');
+  newBtn.addEventListener('click', ()=> showPrescriptionForm());
+  actions.appendChild(newBtn); html.appendChild(actions);
+  const listWrap = create('div', {class:'ks-list'});
+  if (list.length) {
+    list.forEach(p => {
       const pat = (loadGlobalPatients()||[]).find(x=>x.id===p.patientId) || {name:'-'};
-      return create('div', {class:'ks-list-item'}, [
-        create('div', {class:'ks-list-main'}, `${escapeHtml(pat.name)} — ${new Date(p.datetime).toLocaleString()}`),
-        create('div', {class:'ks-list-meta'}, [ create('button',{class:'action-btn small','data-id':p.id}, p.pickedUp ? 'Sudah Ambil' : 'Ambil') ])
-      ]);
-    }) : create('div', {class:'ks-empty'}, 'Belum ada resep.'))
-  ]);
-  showModal(html);
-  $('#ks-presc-new')?.addEventListener('click', ()=> showPrescriptionForm());
-  $$('#ks-modal-root .ks-list-item .action-btn').forEach(b => {
-    b.addEventListener('click', ()=> {
-      const id = b.getAttribute('data-id');
-      const idx = appData.prescriptions.findIndex(x=>x.id===id);
-      if (idx>=0) {
-        appData.prescriptions[idx].pickedUp = true;
-        saveDataForRole(currentUser.role);
-        toast('Resep ditandai sudah diambil');
-        hideModal();
-      }
+      const item = create('div', {class:'ks-list-item'});
+      item.appendChild(create('div', {class:'ks-list-main'}, `${escapeHtml(pat.name)} — ${new Date(p.datetime).toLocaleString()}`));
+      const meta = create('div', {class:'ks-list-meta'});
+      const takeBtn = create('button',{class:'action-btn small'}, p.pickedUp ? 'Sudah Ambil' : 'Ambil');
+      takeBtn.addEventListener('click', ()=> {
+        const idx = appData.prescriptions.findIndex(x=>x.id===p.id);
+        if (idx>=0) { appData.prescriptions[idx].pickedUp = true; saveDataForRole(currentUser.role); toast('Resep ditandai sudah diambil'); hideModal(); }
+      });
+      meta.appendChild(takeBtn); item.appendChild(meta); listWrap.appendChild(item);
     });
-  });
+  } else {
+    listWrap.appendChild(create('div', {class:'ks-empty'}, 'Belum ada resep.'));
+  }
+  html.appendChild(listWrap);
+  showModal(html);
 }
 function showPrescriptionForm() {
   if (!(loadGlobalPatients() && loadGlobalPatients().length)) { toast('Tambah pasien dulu'); return; }
-  const form = create('form', {class:'ks-form', id:'ks-presc-form'}, [
-    create('h3', {class:'card-title'}, 'Buat Resep'),
-    create('label', {}, 'Pilih Pasien', create('select',{id:'ks-presc-patient'}, (loadGlobalPatients()||[]).map(p=> create('option', {value:p.id}, p.name)))),
-    create('label', {}, 'Item (pisahkan koma)', create('input',{id:'ks-presc-items', placeholder:'Paracetamol 10mg x2, Amoxicillin 500mg x7'})),
-    create('div', {style:'margin-top:12px;display:flex;gap:8px'}, [
-      create('button', {type:'submit', class:'btn btn-primary'}, 'Simpan'),
-      create('button', {type:'button', class:'btn btn-outline', id:'ks-presc-cancel'}, 'Batal')
-    ])
-  ]);
+  const form = create('form', {class:'ks-form', id:'ks-presc-form'});
+  form.appendChild(create('h3', {class:'card-title'}, 'Buat Resep'));
+  const sel = create('select',{id:'ks-presc-patient'});
+  (loadGlobalPatients()||[]).forEach(p=> sel.appendChild(create('option', {value:p.id}, p.name)));
+  form.appendChild(create('label', {}, 'Pilih Pasien', sel));
+  form.appendChild(create('label', {}, 'Item (pisahkan koma)', create('input',{id:'ks-presc-items', placeholder:'Paracetamol 10mg x2, Amoxicillin 500mg x7'})));
+  const btnWrap = create('div', {style:'margin-top:12px;display:flex;gap:8px'});
+  const saveBtn = create('button', {type:'submit', class:'btn btn-primary'}, 'Simpan');
+  const cancelBtn = create('button', {type:'button', class:'btn btn-outline', id:'ks-presc-cancel'}, 'Batal');
+  cancelBtn.addEventListener('click', hideModal);
+  btnWrap.appendChild(saveBtn); btnWrap.appendChild(cancelBtn);
+  form.appendChild(btnWrap);
+
   showModal(form);
-  $('#ks-presc-cancel').addEventListener('click', hideModal);
   form.addEventListener('submit', (ev)=> {
     ev.preventDefault();
     const pid = $('#ks-presc-patient').value;
@@ -733,13 +844,18 @@ function openReports() {
   const totalAppointments = (appData.appointments||[]).length;
   const totalPayments = (appData.payments||[]).reduce((s,p)=>s+(p.amount||0),0);
   const lowStock = (appData.stock||[]).filter(s=> s.qty <= (s.minThreshold||0));
-  const html = create('div', {class:'ks-card'}, [
-    create('h3', {class:'card-title'}, 'Laporan Harian (Ringkas)'),
-    create('div', {class:'kv-row'}, [create('div',{},'Jumlah Pasien (global)'), create('div',{}, String(totalPatients))]),
-    create('div', {class:'kv-row'}, [create('div',{},'Jumlah Janji (role)'), create('div',{}, String(totalAppointments))]),
-    create('div', {class:'kv-row'}, [create('div',{},'Pendapatan (Rp)'), create('div',{}, String(totalPayments))]),
-    create('div', {style:'margin-top:12px'}, create('h4', {}, 'Stok yang perlu diorder'), lowStock.length ? create('ul', {}, lowStock.map(s => create('li', {}, `${escapeHtml(s.name)} (${s.qty})`))) : create('div', {}, 'Tidak ada'))
-  ]);
+  const html = create('div', {class:'ks-card'});
+  html.appendChild(create('h3', {class:'card-title'}, 'Laporan Harian (Ringkas)'));
+  html.appendChild(create('div', {class:'kv-row'}, [create('div',{},'Jumlah Pasien (global)'), create('div',{}, String(totalPatients))]));
+  html.appendChild(create('div', {class:'kv-row'}, [create('div',{},'Jumlah Janji (role)'), create('div',{}, String(totalAppointments))]));
+  html.appendChild(create('div', {class:'kv-row'}, [create('div',{},'Pendapatan (Rp)'), create('div',{}, String(totalPayments))]));
+  const lowWrap = create('div', {style:'margin-top:12px'}, create('h4', {}, 'Stok yang perlu diorder'));
+  if (lowStock.length) {
+    const ul = create('ul');
+    lowStock.forEach(s => ul.appendChild(create('li', {}, `${escapeHtml(s.name)} (${s.qty})`)));
+    lowWrap.appendChild(ul);
+  } else lowWrap.appendChild(create('div', {}, 'Tidak ada'));
+  html.appendChild(lowWrap);
   showModal(html);
 }
 
@@ -851,15 +967,15 @@ function buildPasienDashboard(){
   const root = getDashContainerByRoleKey('Pasien'); if (!root) return;
   root.innerHTML = `
     <div class="card-title">Halo, ${escapeHtml(currentUser.name)}</div>
-    <div class="quick-actions">
-      <button class="action-btn" id="ks-my-appointments">Lihat Janji Saya</button>
-      <button class="action-btn" id="ks-my-history">Riwayat Kunjungan</button>
-      <button class="action-btn" id="ks-new-queue">Daftar Antrian Baru</button>
+    <div class="quick-actions patient-quick">
+      <button class="patient-btn" id="ks-my-appointments">Lihat Janji Saya</button>
+      <button class="patient-btn" id="ks-my-history">Riwayat Kunjungan</button>
+      <button class="patient-btn" id="ks-new-queue">Daftar Antrian Baru</button>
     </div>
   `;
-  $('#ks-my-appointments')?.addEventListener('click', openAppointments);
-  $('#ks-my-history')?.addEventListener('click', ()=> toast('Riwayat kunjungan (contoh)'));
-  $('#ks-new-queue')?.addEventListener('click', ()=> { toast('Mendaftar antrian (contoh)'); });
+  $('#ks-my-appointments')?.addEventListener('click', ()=> { if (typeof showMyAppointmentsModal === 'function') showMyAppointmentsModal(); else openAppointments(); });
+  $('#ks-my-history')?.addEventListener('click', ()=> { if (typeof showMyHistoryModal === 'function') showMyHistoryModal(); else toast('Fitur riwayat belum tersedia'); });
+  $('#ks-new-queue')?.addEventListener('click', ()=> { if (typeof showNewQueueForm === 'function') showNewQueueForm(); else toast('Fitur daftar antrian belum tersedia'); });
 }
 
 /* ---------- session restore on load ---------- */
@@ -880,7 +996,20 @@ document.addEventListener('DOMContentLoaded', ()=> {
       if (mainScreen) { mainScreen.style.display = 'block'; mainScreen.classList.add('screen--active'); mainScreen.setAttribute('aria-hidden','false'); }
       loadDataForRole(currentUser.role);
       prepareDashboardFor(currentUser);
-    } catch(e){ console.warn('restore fail', e); }
+
+      // --- PATCH: restore session -> notify voice/other listeners that user is "already logged in"
+      setTimeout(() => {
+        try {
+          const detail = { name: currentUser.name || currentUser.username, role: currentUser.role, username: currentUser.username };
+          if (!window.__ks_voice_notified) {
+            document.dispatchEvent(new CustomEvent('user-logged-in', { detail }));
+            window.__ks_voice_notified = true;
+          }
+        } catch(e) { console.warn('dispatch user-logged-in on restore failed', e); }
+      }, 450);
+      // --- end PATCH ---
+
+    } catch(e) { console.warn('restore fail', e); }
   }
 });
 
@@ -889,3 +1018,202 @@ window.__ks = {
   loadDataForRole, saveDataForRole, appData,
   dataKeyForRole, roleKey, loadGlobalPatients, saveGlobalPatients
 };
+
+/* ------------------ PATCH ADDITIONS (non-invasive) ------------------ */
+
+/* 1) Patient helpers & handlers (safe additions) */
+function getOrCreatePatientForCurrentUser() {
+  if (!currentUser) return null;
+  const name = currentUser.name || currentUser.username || '';
+  let list = loadGlobalPatients() || [];
+  let p = list.find(x => (x.name||'').toLowerCase() === name.toLowerCase());
+  if (!p) {
+    p = { id: uid('pat'), name: name, phone: '', dob: '', notes: `Auto-created for user ${currentUser.username}` };
+    list.unshift(p);
+    saveGlobalPatients(list);
+    toast('Profil pasien otomatis dibuat untuk akun Anda');
+  }
+  return p.id;
+}
+
+function showMyAppointmentsModal() {
+  const pid = getOrCreatePatientForCurrentUser();
+  if (!pid) { toast('Data pasien tidak tersedia'); return; }
+
+  const roles = ['Petugas Administrasi','Dokter','Perawat','Kasir','Apoteker','Manajer Klinik','Pasien'];
+  let appts = [];
+  roles.forEach(r => {
+    try {
+      const raw = safeJsonParseKey(dataKeyForRole(r), null);
+      if (!raw) return;
+      const d = raw;
+      if (d && Array.isArray(d.appointments)) {
+        appts = appts.concat(d.appointments.filter(a => a.patientId === pid));
+      }
+    } catch(e){}
+  });
+
+  const html = create('div', {class:'ks-listwrap'});
+  html.appendChild(create('h3', {class:'card-title'}, 'Janji Saya'));
+  const listWrap = create('div', {class:'ks-list'});
+  if (appts.length) {
+    appts.forEach(a => {
+      const item = create('div',{class:'ks-list-item'});
+      item.appendChild(create('div',{class:'ks-list-main'}, `${new Date(a.datetime).toLocaleString()} — ${escapeHtml(a.doctor||'-')}`));
+      item.appendChild(create('div',{class:'ks-list-meta'}, [ create('div',{}, a.status || '') ]));
+      listWrap.appendChild(item);
+    });
+  } else {
+    listWrap.appendChild(create('div',{class:'ks-empty'}, 'Belum ada janji.'));
+  }
+  html.appendChild(listWrap);
+  showModal(html);
+}
+
+function showMyHistoryModal() {
+  const pid = getOrCreatePatientForCurrentUser();
+  if (!pid) { toast('Data pasien tidak tersedia'); return; }
+  const records = getAllMedicalRecordsForPatient(pid);
+  const html = create('div',{class:'ks-card'});
+  html.appendChild(create('h3',{class:'card-title'}, 'Riwayat Kunjungan / Rekam Medis'));
+  if (records.length) {
+    const div = create('div', {}, create('ul', {}, records.map(r => create('li', {}, `${new Date(r.datetime).toLocaleString()} — ${escapeHtml(r.doctor)}: ${escapeHtml(r.notes)}`))));
+    html.appendChild(div);
+  } else {
+    html.appendChild(create('div',{class:'ks-empty'}, 'Belum ada riwayat.'));
+  }
+  const closeBtn = create('button',{class:'btn btn-outline', id:'ks-hist-close'}, 'Tutup');
+  closeBtn.addEventListener('click', hideModal);
+  html.appendChild(create('div',{style:'margin-top:12px'}, closeBtn));
+  showModal(html);
+}
+
+function showNewQueueForm() {
+  const pid = getOrCreatePatientForCurrentUser();
+  if (!pid) { toast('Data pasien tidak tersedia'); return; }
+
+  const form = create('form',{class:'ks-form'});
+  form.appendChild(create('h3',{class:'card-title'}, 'Daftar Antrian / Buat Janji'));
+  form.appendChild(create('label', {}, 'Nama Pasien', create('input',{type:'text', value: (currentUser.name||''), disabled:true})));
+  form.appendChild(create('label', {}, 'Dokter (nama)', create('input',{type:'text', id:'ks-newq-doctor', placeholder:'dr. Contoh'})));
+  form.appendChild(create('label', {}, 'Tanggal & Waktu', create('input',{type:'datetime-local', id:'ks-newq-dt'})));
+  const btnWrap = create('div',{style:'margin-top:12px;display:flex;gap:8px'});
+  const submitBtn = create('button',{type:'submit', class:'btn btn-primary'}, 'Daftar');
+  const cancelBtn = create('button',{type:'button', class:'btn btn-outline', id:'ks-newq-cancel'}, 'Batal');
+  cancelBtn.addEventListener('click', hideModal);
+  btnWrap.appendChild(submitBtn); btnWrap.appendChild(cancelBtn);
+  form.appendChild(btnWrap);
+
+  showModal(form);
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const doctor = $('#ks-newq-doctor').value.trim();
+    const dt = $('#ks-newq-dt').value;
+    if (!dt) return alert('Pilih tanggal & waktu untuk antrian');
+    const roleKeyName = dataKeyForRole('Pasien');
+    let roleData = { appointments: [] };
+    try { roleData = safeJsonParseKey(roleKeyName, roleData); } catch(e){}
+    const newA = { id: uid('appt'), patientId: pid, doctor, datetime: new Date(dt).toISOString(), status: 'scheduled', createdBy: currentUser.username };
+    roleData.appointments = roleData.appointments || [];
+    roleData.appointments.unshift(newA);
+    try { localStorage.setItem(roleKeyName, JSON.stringify(roleData)); } catch(e){}
+    toast('Antrian / janji berhasil dibuat');
+    hideModal();
+  });
+}
+
+/* 2) Panel enter/exit animation utility (applies across roles) */
+(function(){
+  function animateShowPanel(newEl) {
+    if (!newEl) return;
+    const allPanels = Array.from(document.querySelectorAll('.role-dashboard'));
+    const prev = allPanels.find(p => !p.classList.contains('hidden') && p !== newEl);
+    if (prev && prev !== newEl) {
+      prev.classList.add('patch-exit');
+      prev.addEventListener('animationend', function onEnd() {
+        prev.removeEventListener('animationend', onEnd);
+        prev.classList.add('hidden');
+        prev.classList.remove('patch-exit');
+        newEl.classList.remove('hidden');
+        newEl.classList.add('patch-enter');
+        newEl.addEventListener('animationend', function onIn() {
+          newEl.removeEventListener('animationend', onIn);
+          newEl.classList.remove('patch-enter');
+        }, { once: true });
+      }, { once: true });
+    } else {
+      newEl.classList.remove('hidden');
+      newEl.classList.add('patch-enter');
+      newEl.addEventListener('animationend', function onIn() {
+        newEl.removeEventListener('animationend', onIn);
+        newEl.classList.remove('patch-enter');
+      }, { once: true });
+    }
+  }
+
+  window.animateShowPanel = animateShowPanel;
+
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('.nav-link');
+    if (!a) return;
+    setTimeout(()=> {
+      const sess = sessionStorage.getItem('ks_user');
+      if (!sess) return;
+      try {
+        const cur = JSON.parse(sess);
+        const sel = getDashContainerByRoleKey(cur.role);
+        if (sel) animateShowPanel(sel);
+      } catch(e){}
+    }, 120);
+  }, true);
+})();
+
+/* 3) Real-time stat animation toggle (Beranda) */
+let realtimeStatsInterval = null;
+let realtimeAnimating = false;
+
+function animateNumber(el, from, to, duration=900) {
+  const start = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const ease = (t<0.5) ? (2*t*t) : (-1 + (4 - 2*t)*t);
+    const v = Math.round(from + (to - from) * ease);
+    el.textContent = v.toLocaleString();
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function startRealtimeStats(elMap) {
+  if (realtimeStatsInterval) clearInterval(realtimeStatsInterval);
+  realtimeAnimating = true;
+  realtimeStatsInterval = setInterval(()=> {
+    const currentPatients = (loadGlobalPatients()||[]).length;
+    const appts = (appData.appointments||[]).length;
+    const paymentsTotal = (appData.payments||[]).reduce((s,p)=>s+(p.amount||0),0);
+    const pTo = currentPatients + Math.floor((Math.random()*3)-1);
+    const aTo = Math.max(0, appts + Math.floor((Math.random()*3)-1));
+    const payTo = Math.max(0, paymentsTotal + Math.floor((Math.random()*5000)-2000));
+    animateNumber(elMap.patients, Number(elMap.patients.dataset.current||0), pTo, 700);
+    animateNumber(elMap.appts, Number(elMap.appts.dataset.current||0), aTo, 700);
+    animateNumber(elMap.payments, Number(elMap.payments.dataset.current||0), payTo, 700);
+    elMap.patients.dataset.current = pTo;
+    elMap.appts.dataset.current = aTo;
+    elMap.payments.dataset.current = payTo;
+  }, 1400);
+}
+
+function stopRealtimeStats() {
+  if (realtimeStatsInterval) clearInterval(realtimeStatsInterval);
+  realtimeStatsInterval = null;
+  realtimeAnimating = false;
+}
+
+window.getOrCreatePatientForCurrentUser = getOrCreatePatientForCurrentUser;
+window.showMyAppointmentsModal = showMyAppointmentsModal;
+window.showMyHistoryModal = showMyHistoryModal;
+window.showNewQueueForm = showNewQueueForm;
+window.startRealtimeStats = startRealtimeStats;
+window.stopRealtimeStats = stopRealtimeStats;
+
+/* end of app.js */

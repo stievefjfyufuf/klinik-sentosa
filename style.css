@@ -51,18 +51,35 @@ body{background:linear-gradient(180deg,#071026 0%, #0b2130 100%);color:#e6eef5;m
 
 /* NAVBAR + DASHBOARD */
 .screen-main{display:none;min-height:100vh}
-.navbar{height:72px;padding:12px 28px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.02)}
+.navbar{height:72px;padding:12px 28px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.02);position:relative;overflow:hidden}
 .nav-brand{display:flex;gap:12px;align-items:center}
 .logo-small{width:36px;height:36px;border-radius:8px;background:linear-gradient(90deg,var(--accent1),var(--accent2));display:flex;align-items:center;justify-content:center;color:#02171b;font-weight:700}
 .nav-title{font-weight:700;margin-left:6px}
-.nav-links{display:flex;gap:18px;margin-left:20px}
-.nav-links a{color:var(--muted);text-decoration:none;padding:6px 8px;border-radius:8px}
+.nav-links{display:flex;gap:18px;margin-left:20px;align-items:center}
+.nav-link{color:var(--muted);text-decoration:none;padding:6px 8px;border-radius:8px;cursor:pointer}
 .nav-right{display:flex;gap:14px;align-items:center}
 .nav-user-role,.nav-username{color:var(--muted)}
 
+/* navbar accent image (uploaded file) */
+.navbar::before {
+  content: "";
+  position: absolute;
+  left: -12%;
+  top: -40%;
+  width: 520px;
+  height: 520px;
+  background-image: url('/mnt/data/d55f2895-a0b6-47eb-b790-5d6e4069b037.png');
+  background-size: cover;
+  background-position: center;
+  opacity: 0.06;
+  transform: rotate(-12deg);
+  filter: saturate(0.7) blur(2px);
+  pointer-events: none;
+}
+
 /* dashboard root */
 .dashboard-root{padding:32px;display:grid;grid-template-columns:300px 1fr 320px;gap:24px;align-items:start}
-.role-dashboard{background:linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.01));padding:18px;border-radius:12px;min-height:160px;box-shadow:0 18px 45px rgba(2,7,14,0.6)}
+.role-dashboard{background:linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.01));padding:18px;border-radius:12px;min-height:160px;box-shadow:0 18px 45px rgba(2,7,14,0.6);transition:transform .38s cubic-bezier(.2,.9,.2,1),opacity .38s ease}
 .hidden{display:none}
 
 /* quick card styles */
@@ -76,11 +93,18 @@ body{background:linear-gradient(180deg,#071026 0%, #0b2130 100%);color:#e6eef5;m
 .workspace h3{margin-bottom:12px}
 .kv-row{display:flex;justify-content:space-between;color:var(--muted);padding:8px 0;border-bottom:1px dashed rgba(255,255,255,0.02)}
 
+/* patient search/pagination form */
+.ks-search-bar { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+.ks-search-bar input[type="search"]{ flex:1; padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.04); background: rgba(255,255,255,0.01); color:inherit; }
+.ks-pagination { display:flex; gap:6px; align-items:center; margin-top:8px; justify-content:flex-end; }
+.ks-page-btn { padding:6px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.03); background:transparent; cursor:pointer; }
+
 /* small responsive */
 @media (max-width:1100px){
   .dashboard-root{grid-template-columns:1fr;grid-auto-rows:auto}
   .login-card{flex-direction:column}
   .login-form{width:100%;border-left:none;padding-left:0}
+  .navbar::before{ display:none; }
 }
 
 /* === KS UI additions (modal, toast, lists, anim) === */
@@ -112,3 +136,68 @@ body{background:linear-gradient(180deg,#071026 0%, #0b2130 100%);color:#e6eef5;m
 
 /* small tweaks for buttons in modal and lists */
 .ks-list .action-btn.small, .ks-list .action-btn { padding:8px 10px; font-size:0.95rem; }
+
+/* === Panel switch animations === */
+@keyframes ks-dash-in {
+  0% { transform: translateY(12px) scale(.995); opacity: 0; filter: blur(4px); }
+  60% { transform: translateY(-6px) scale(1.002); opacity: 1; filter: blur(0); }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes ks-dash-out {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(-12px) scale(.995); opacity: 0; filter: blur(3px); }
+}
+.dash-enter { animation: ks-dash-in .48s cubic-bezier(.2,.9,.25,1) forwards; }
+.dash-exit  { animation: ks-dash-out .36s cubic-bezier(.3,.8,.2,1) forwards; }
+
+/* subtle nav active */
+.nav-link.active { position: relative; color: #fff; }
+.nav-link.active::after { content: ''; position: absolute; left: 0; bottom: -8px; height: 3px; width: 36px; border-radius: 6px; background: linear-gradient(90deg,var(--accent1),var(--accent2)); box-shadow: 0 6px 18px rgba(66,209,255,0.08); }
+
+/* --- Real-time stat micro animation styles --- */
+.stat-grid { display:flex; gap:12px; align-items:stretch; margin-top:12px; }
+.stat-card { flex:1; padding:14px; border-radius:12px; background: linear-gradient(180deg, rgba(255,255,255,0.012), rgba(255,255,255,0.006)); box-shadow: 0 12px 30px rgba(2,7,14,0.45); display:flex; flex-direction:column; justify-content:center; }
+.stat-number { font-size:1.6rem; font-weight:800; }
+.stat-label { color:var(--muted); font-size:0.9rem; margin-top:6px; }
+
+/* toggle switch */
+.toggle-row { display:flex; gap:8px; align-items:center; margin-top:10px; }
+.toggle-btn { padding:8px 12px; border-radius:999px; background: linear-gradient(90deg,var(--accent1),var(--accent2)); color:#02171b; font-weight:700; cursor:pointer; border:none; }
+.toggle-btn.secondary { background:transparent; border:1px solid rgba(255,255,255,0.04); color:var(--muted); }
+
+/* responsive tweaks for stats */
+@media (max-width:900px){
+  .stat-grid { flex-direction:column; }
+}
+
+/* ------------------ enhancements (non-invasive) ------------------ */
+/* patient buttons appearance (patch-additions.css also present but keep here safe fallback) */
+.patient-quick { display:flex; flex-direction:column; gap:12px; margin-top:8px }
+.patient-quick .patient-btn { padding:14px 18px; border-radius:12px; border:1px solid rgba(255,255,255,0.03); background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.004)); cursor:pointer; text-align:left; box-shadow: 0 18px 40px rgba(2,7,14,0.45); transition: transform .25s cubic-bezier(.2,.9,.2,1), box-shadow .25s }
+.patient-quick .patient-btn:hover { transform: translateY(-6px) scale(1.01); box-shadow: 0 28px 60px rgba(2,7,14,0.55) }
+
+@keyframes patch-dash-in { 0% { transform: translateY(16px) scale(.995); opacity: 0; } 60% { transform: translateY(-6px) scale(1.003); opacity: 1; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+@keyframes patch-dash-out { 0% { transform: translateY(0) scale(1); opacity: 1; } 100% { transform: translateY(-18px) scale(.992); opacity: 0; } }
+.patch-enter { animation: patch-dash-in .42s cubic-bezier(.2,.9,.25,1) forwards; }
+.patch-exit  { animation: patch-dash-out .34s cubic-bezier(.3,.8,.2,1) forwards; }
+
+.stat-badge { display:inline-block; padding:6px 8px; border-radius:999px; font-weight:700; font-size:0.85rem; background: linear-gradient(90deg,#42d1ff,#ff6b6b); color:#02171b; margin-left:8px }
+
+.navbar::after { content: ''; position:absolute; right:-6%; top:-30%; width:420px; height:420px; background-image: url('/mnt/data/d55f2895-a0b6-47eb-b790-5d6e4069b037.png'); background-size:cover; background-position:center; opacity:0.04; transform: rotate(8deg); pointer-events:none }
+
+/* small dedicated patch-file (patch-additions.css) */
+.patient-quick { display:flex; flex-direction:column; gap:12px; margin-top:8px }
+.patient-quick .patient-btn { padding:14px 18px; border-radius:12px; border:1px solid rgba(255,255,255,0.03); background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.004)); cursor:pointer; text-align:left; box-shadow: 0 18px 40px rgba(2,7,14,0.45); transition: transform .25s cubic-bezier(.2,.9,.2,1), box-shadow .25s }
+.patient-quick .patient-btn:hover { transform: translateY(-6px) scale(1.01); box-shadow: 0 28px 60px rgba(2,7,14,0.55) }
+
+@keyframes patch-dash-in { 0% { transform: translateY(16px) scale(.995); opacity: 0; } 60% { transform: translateY(-6px) scale(1.003); opacity: 1; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+@keyframes patch-dash-out { 0% { transform: translateY(0) scale(1); opacity: 1; } 100% { transform: translateY(-18px) scale(.992); opacity: 0; } }
+.patch-enter { animation: patch-dash-in .42s cubic-bezier(.2,.9,.25,1) forwards; }
+.patch-exit  { animation: patch-dash-out .34s cubic-bezier(.3,.8,.2,1) forwards; }
+
+.stat-badge { display:inline-block; padding:6px 8px; border-radius:999px; font-weight:700; font-size:0.85rem; background: linear-gradient(90deg,#42d1ff,#ff6b6b); color:#02171b; margin-left:8px }
+
+.navbar::after { content: ''; position:absolute; right:-6%; top:-30%; width:420px; height:420px; background-image: url('/mnt/data/d55f2895-a0b6-47eb-b790-5d6e4069b037.png'); background-size:cover; background-position:center; opacity:0.04; transform: rotate(8deg); pointer-events:none }
+
+
+/* end of style.css */

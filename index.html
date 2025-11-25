@@ -6,7 +6,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <!-- tambahan patch CSS (non-invasive, berada setelah style utama) -->
+  <link rel="stylesheet" href="patch-additions.css">
   <script defer src="app.js"></script>
+  <!-- patch-additions.js akan memuat setelah app.js -->
+  <script defer src="patch-additions.js"></script>
 </head>
 <body>
   <div id="app">
@@ -99,6 +103,9 @@
         <div id="dash-pasien" class="role-dashboard hidden" data-role="Pasien"></div>
       </main>
     </section>
+    <link rel="stylesheet" href="patch-voice.css">
+<script src="patch-voice.js" defer></script>
+
 
   </div>
 </body>

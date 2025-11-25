@@ -1,0 +1,39 @@
+/* patch-voice.css - small UI for voice toggle */
+#ks-voice-toggle {
+  margin-left: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.04);
+  background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  color: var(--muted);
+  font-weight:700;
+  cursor:pointer;
+}
+#ks-voice-toggle.on {
+  background: linear-gradient(90deg,var(--accent1),var(--accent2));
+  color:#02171b;
+}
+#ks-voice-bubble {
+  position: fixed;
+  right: 18px;
+  top: 90px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  color: inherit;
+  padding: 8px 12px;
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(2,7,14,0.6);
+  z-index: 12000;
+  display: none;
+  font-weight:600;
+}
+#ks-voice-bubble.show { display:block; animation: ks-voice-bubble-in .36s ease; }
+@keyframes ks-voice-bubble-in { from { opacity:0; transform: translateY(-6px);} to { opacity:1; transform: translateY(0);} }
+#ks-voice-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  left: 20px;
+  border-width: 6px;
+  border-style: solid;
+  border-color: rgba(255,255,255,0.01) transparent transparent transparent;
+}
